@@ -7,6 +7,7 @@ import { PHYS } from './config.js';
 import { computeStats } from './parts.js';
 import { clamp, wrapAngle, lerpAngle } from './util.js';
 import { makeDrivetrain, driveStep, dragAt, initDrive } from './drivetrain.js';
+import { pitBounds, PIT, TYRE, tyreGrip } from './pit.js';
 
 
 // Continuous stats (base car + parts, see parts.js) -> physics constants.
@@ -43,6 +44,8 @@ export function makeCarState(type, build) {
     airT: 0, trick: false, trickT: 0, rampS: -1, rampAir: false, padS: -1, wallT: 0,
     si: -1, lat: 0, P: 0, lastS: 0, wrongT: 0, draftT: 0,
     gear: 1, rpm: 0.12, shiftT: 0, shiftDur: 1, shiftCD: 0, perfT: 0, limT: 0, lastShift: '', manual: false,
+    tyre: 0, gripMul: 1,                                   // tyre wear 0..1 and the grip it leaves
+    inPit: false, pitLim: false, pitT: 0, pitDone: false,  // pit lane, limiter, service hold
     ev: [],
   };
 }
@@ -64,6 +67,7 @@ export function placeCar(c, track, slot) {
   c.x = slot.x; c.z = slot.z; c.h = slot.h; c.y = 0; c.vy = 0;
   c.vx = c.vz = c.vf = c.vl = 0;
   initDrive(c);
+  c.tyre = 0; c.gripMul = 1; c.inPit = c.pitLim = c.pitDone = false; c.pitT = 0;
   c.si = -1;
   const pr = track.project(c.x, c.z, -1);
   c.si = pr.i; c.lat = pr.lat; c.lastS = pr.s;
@@ -81,6 +85,7 @@ export function respawn(c, track, back = 8) {
   c.stunT = 0; c.stunKind = ''; c.drift = 0; c.driftCharge = 0; c.driftTier = 0;
   c.ghostT = PHYS.respawnGhost; c.wrongT = 0;
   c.gear = 1; c.shiftT = 0; c.perfT = 0;
+  c.inPit = c.pitLim = false; c.pitT = 0;
 }
 
 // Jump `dist` metres along the track keeping lateral offset and speed.
@@ -98,14 +103,22 @@ const relS = (track, s, s0) => { let d = s - s0; const L = track.L; if (d > L / 
 
 // inp: { throttle 0..1, brake 0..1, steer -1..1, drift (held), driftPressed (edge),
 //        shiftUp / shiftDown (edges, manual gearbox: c.manual) }
-// env: { allowDrive, topMul }
+// env: { allowDrive, topMul, pits (pit lane open), wear (tyre wear rate, 0 = off) }
 export function stepCar(c, inp, track, dt, env) {
   const S = c.spec, ev = c.ev;
   for (let i = 0; i < TIMERS.length; i++) { const k = TIMERS[i]; if (c[k] > 0) c[k] = Math.max(0, c[k] - dt); }
   if (c.stunT > 0) { c.stunT -= dt; if (c.stunT <= 0) { c.stunT = 0; c.stunKind = ''; } }
   if (c.hopT > 0) c.hopT -= dt;
   const stunned = c.stunT > 0;
-  const drive = env.allowDrive && !stunned;
+  // in the pit box: held still while the crew works, new tyres when they're done
+  const held = c.pitT > 0;
+  if (held) {
+    c.pitT -= dt;
+    c.vx = c.vz = 0;
+    if (c.pitT <= 0) { c.pitT = 0; c.tyre = 0; c.gripMul = 1; c.pitDone = true; ev.push('pitdone'); }
+  }
+  const drive = env.allowDrive && !stunned && !held;
+  const gm = c.gripMul ?? 1;
   const thr = drive ? inp.throttle : 0, brk = drive ? inp.brake : 0, st = drive ? inp.steer : 0;
   const onGround = c.y <= 0.0001 && c.vy <= 0;
   let fx = Math.sin(c.h), fz = Math.cos(c.h);
@@ -140,9 +153,9 @@ export function stepCar(c, inp, track, dt, env) {
   let yaw;
   if (c.drift) {
     const k = clamp(st * c.drift, -1, 1);
-    yaw = c.drift * S.driftYaw * (0.5 + 0.8 * (k + 1) / 2) * lowF * (1 - 0.2 * clamp(sp / S.top, 0, 1.2));
+    yaw = c.drift * S.driftYaw * gm * (0.5 + 0.8 * (k + 1) / 2) * lowF * (1 - 0.2 * clamp(sp / S.top, 0, 1.2));
   } else {
-    yaw = st * S.maxYaw * lowF * (1 - 0.35 * clamp(sp / S.top, 0, 1.2)) * (vf < -0.5 ? -1 : 1);
+    yaw = st * S.maxYaw * gm * lowF * (1 - 0.35 * clamp(sp / S.top, 0, 1.2)) * (vf < -0.5 ? -1 : 1);
   }
   if (!onGround) yaw *= 0.55;
   if (stunned) yaw = 0;
@@ -159,6 +172,7 @@ export function stepCar(c, inp, track, dt, env) {
   if (c.invT > 0) top *= 1.12;
   if (c.ramT > 0) top *= 1.1;
   if (c.slowT > 0) top *= 0.6;
+  if (c.pitLim) top = Math.min(top, PIT.limit);
   const Dt = S.drive;
   // gears + revs (m/s^2 at the wheels). On the grid the clutch is out: rev away.
   const engine = env.allowDrive ? driveStep(c, Dt, vf, thr, brk, dt, inp, onGround)
@@ -177,8 +191,9 @@ export function stepCar(c, inp, track, dt, env) {
     }
     if (thr === 0 && brk === 0 && c.boostT <= 0) vf -= Math.sign(vf) * Math.min(Math.abs(vf), PHYS.coast * dt);
     if (vf > top) vf -= Math.min(vf - top, (vf - top) * 1.6 * dt + 3 * dt);
+    if (c.pitLim && vf > PIT.limit) vf -= Math.min(vf - PIT.limit, 26 * dt);   // pit limiter: brakes down to the limit
     if (stunned) vf *= Math.exp(-(c.stunKind === 'spin' ? 1.9 : 1.5) * dt);
-    const grip = c.drift ? S.driftGrip : S.grip;
+    const grip = (c.drift ? S.driftGrip : S.grip) * gm;
     const nvl = vl * Math.exp(-grip * dt);
     if (c.drift) vf += Math.abs(vl - nvl) * 0.22;
     vl = nvl;
@@ -186,16 +201,31 @@ export function stepCar(c, inp, track, dt, env) {
     vl *= Math.exp(-0.8 * dt);
     vf -= vf * 0.04 * dt;
   }
+  if (held) { vf = 0; vl = 0; }
   c.vx = fx * vf + rx * vl; c.vz = fz * vf + rz * vl;
   c.vf = vf; c.vl = vl;
+  // ---- tyre wear: distance, sliding, drifting and hard braking all take rubber off
+  if (env.wear > 0 && onGround && !held) {
+    const T = TYRE;
+    c.tyre = Math.min(1, c.tyre + dt * env.wear * (T.base * Math.min(1.3, Math.abs(vf) / S.top) + T.slide * Math.min(1, Math.abs(vl) / 6)
+      + (c.drift ? T.drift : 0) + (brk > 0.5 && Math.abs(vf) > 8 ? T.brake : 0)));
+    c.gripMul = tyreGrip(c.tyre);
+  }
   c.x += c.vx * dt; c.z += c.vz * dt;
 
-  // ---- track walls
+  // ---- track walls (and the pit lane's, sim/pit.js)
   const pr = track.project(c.x, c.z, c.si, c._pr || (c._pr = {}));
   c.si = pr.i;
   const limit = track.halfW + PHYS.curbW - PHYS.carHalfW;
-  if (Math.abs(pr.lat) > limit) {
-    const sgn = Math.sign(pr.lat), over = Math.abs(pr.lat) - limit;
+  const pz = env.pits && track.pit ? pitBounds(track, track.pit, pr.s, pr.lat, c._pz || (c._pz = {})) : null;
+  const lo = pz ? pz.lo : -limit, hi = pz ? pz.hi : limit;
+  c.inPit = !!pz?.inPit;
+  c.pitLim = c.inPit && pz.region === 2;
+  if (!pz) c.pitDone = false;
+  // stopped in a pit box: the game starts the service (and its quick-time event)
+  if (c.inPit && pz.box && !c.pitDone && !held && Math.abs(vf) < 0.8 && drive) ev.push('pitbox');
+  if (pr.lat > hi || pr.lat < lo) {
+    const sgn = pr.lat > hi ? 1 : -1, edge = sgn > 0 ? hi : lo, over = (pr.lat - edge) * sgn;
     const nx = track.sz[pr.i], nz = -track.sx[pr.i];    // segment left normal
     c.x -= nx * over * sgn; c.z -= nz * over * sgn;
     const inx = -sgn * nx, inz = -sgn * nz;
@@ -214,7 +244,7 @@ export function stepCar(c, inp, track, dt, env) {
     }
     c.vx *= Math.exp(-0.6 * dt); c.vz *= Math.exp(-0.6 * dt);
     c.wallT = 0.12;
-    pr.lat = sgn * limit;
+    pr.lat = edge;
   }
   c.lat = pr.lat;
 
@@ -240,7 +270,7 @@ export function stepCar(c, inp, track, dt, env) {
   }
   if (!onPad) c.padS = -1;
   let groundY = 0;
-  for (let i = 0; i < feats.ramps.length; i++) {
+  for (let i = 0; i < feats.ramps.length && !c.inPit; i++) {
     const s0 = feats.ramps[i], d = relS(track, s, s0);
     if (d >= 0 && d <= PHYS.rampLen) {
       const gy = PHYS.rampH * d / PHYS.rampLen;

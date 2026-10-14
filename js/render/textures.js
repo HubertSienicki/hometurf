@@ -168,6 +168,33 @@ export const banner = (text, bg = '#11131c', fg = '#ffd23f') => tex('banner' + t
   return c;
 }, { clamp: true });
 
+// Pit garages: one bay per texture width (door, lit interior, team colour band).
+export const garage = () => tex('garage', () => {
+  const [c, g] = canvas(256, 160);
+  g.fillStyle = '#d9dbe0'; g.fillRect(0, 0, 256, 160);
+  const teams = ['#ff3b3b', '#2f8cff', '#ffd23f', '#3ddc84'];
+  for (let k = 0; k < 2; k++) {
+    const x = 10 + k * 128;
+    g.fillStyle = teams[k * 2 + 1 & 3]; g.fillRect(x - 4, 14, 116, 16);
+    g.fillStyle = '#2a2f3a'; g.fillRect(x, 40, 108, 120);
+    const grd = g.createLinearGradient(0, 40, 0, 160); grd.addColorStop(0, '#5b6272'); grd.addColorStop(1, '#9aa1ad');
+    g.fillStyle = grd; g.fillRect(x + 4, 44, 100, 116);
+    g.fillStyle = 'rgba(0,0,0,0.25)'; for (let y = 50; y < 160; y += 12) g.fillRect(x + 4, y, 100, 2);
+    g.fillStyle = teams[k * 2 & 3]; g.fillRect(x + 36, 120, 36, 40);
+  }
+  return c;
+});
+// Round speed-limit sign.
+export const speedSign = text => tex('speedSign' + text, () => {
+  const [c, g] = canvas(128, 128);
+  g.fillStyle = '#ffffff'; g.beginPath(); g.arc(64, 64, 62, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = text === 'END' ? '#5a5f6a' : '#e0251b'; g.lineWidth = 14; g.beginPath(); g.arc(64, 64, 54, 0, Math.PI * 2); g.stroke();
+  g.fillStyle = '#111'; g.font = `900 ${text.length > 3 ? 30 : 46}px "Arial Black", sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(text, 64, 67);
+  if (text === 'END') { g.strokeStyle = '#5a5f6a'; g.lineWidth = 8; g.beginPath(); g.moveTo(26, 102); g.lineTo(102, 26); g.stroke(); }
+  return c;
+}, { clamp: true });
+
 // Floating course markers: item-box row (rainbow "?") and boost pad (chevrons).
 export const markerIcon = kind => tex('marker' + kind, () => {
   const [c, g] = canvas(128, 128);

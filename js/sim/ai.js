@@ -3,6 +3,7 @@
 // Also used as the autopilot after a player finishes.
 import { BOT_LEVELS, PHYS, ABILITY } from './config.js';
 import { clamp, wrapAngle, mulberry32 } from './util.js';
+import { pitZone, boxCentre, PIT } from './pit.js';
 
 export class BotBrain {
   constructor(level = 1, seed = 1) {
@@ -21,7 +22,7 @@ export class BotBrain {
   }
 
   // ctx: { item, itemReady, abilityReady, ability, ahead: {car, gap} | null, behind: {car, gap} | null,
-  //        threat (projectile near), rank, count, started, nearCars (within 18 m) }
+  //        threat (projectile near), rank, count, started, nearCars (within 18 m), wantPit }
   think(c, track, dt, ctx) {
     const o = this.out, L = this.L;
     o.driftPressed = false; o.useItem = false; o.useAbility = false; o.back = false;
@@ -39,11 +40,22 @@ export class BotBrain {
     let target = clamp(kLook * 140, -1, 1) * L.line * hw + this.offset * hw * 0.25;
     if (ctx.dodge) target = clamp(target + ctx.dodge * hw * 0.6, -hw * 0.75, hw * 0.75);
     this.lat += (clamp(target, -hw * 0.8, hw * 0.8) - this.lat) * Math.min(1, dt * 2.2);
+    // pitting: line up on the pit side, then follow the lane (sim/pit.js)
+    const pit = track.pit;
+    let pitting = false, toBox = Infinity;
+    if (pit && (ctx.wantPit || c.inPit)) {
+      const z = pitZone(track, pit, s + look, this._pz || (this._pz = {}));
+      const toEntry = track.wrapS(pit.s0 - s);
+      if (z && (ctx.wantPit || c.inPit)) { pitting = true; this.lat = pit.side * z.u; }
+      else if (ctx.wantPit && toEntry < 140) { pitting = true; this.lat += (pit.side * hw * 0.65 - this.lat) * Math.min(1, dt * 2); }
+      if (c.inPit && ctx.wantPit && !c.pitDone) { const d = track.wrapS(boxCentre(track, pit) - s); toBox = d < track.L / 2 ? d : Infinity; }
+    }
     const p = track.pointAt(s + look);
     const tx = p.x + p.nx * this.lat, tz = p.z + p.nz * this.lat;
     const want = Math.atan2(tx - c.x, tz - c.z);
     const err = wrapAngle(want - c.h);
-    let steer = clamp(-err * L.gain * (c.drift ? 1.6 / c.spec.driftYaw : 1.16 / c.spec.maxYaw), -1, 1);
+    const gm = c.gripMul || 1;    // worn tyres turn less: steer harder, brake earlier
+    let steer = clamp(-err * L.gain * (c.drift ? 1.6 / c.spec.driftYaw : 1.16 / (c.spec.maxYaw * gm)), -1, 1);
 
     // speed: the slowest speed the road ahead allows, given braking distance
     // yaw falls off with speed (see stepCar): v*k = yaw*(1 - c v/top)
@@ -53,19 +65,23 @@ export class BotBrain {
     for (let d = 3; d <= range; d += 3) {
       const k = Math.abs(track.curvAt(s + d));
       kMax = Math.max(kMax, k);
-      const vGrip = S.maxYaw * 0.95 / (k + 0.35 * S.maxYaw * 0.95 / S.top);
+      const yawG = S.maxYaw * gm * 0.95;
+      const vGrip = yawG / (k + 0.35 * yawG / S.top);
       const yd = S.driftYaw * 1.2;
       const vDrift = canDrift && k > 1 / 45 ? yd / (k + 0.2 * yd / S.top) : 0;
       const vSafe = k > 1e-4 ? Math.max(vGrip, vDrift) : Infinity;
       allowed = Math.min(allowed, Math.sqrt(vSafe * vSafe + 2 * PHYS.brake * 0.55 * d));
     }
+    // brake for the limiter line rather than letting the limiter do it
+    if (pitting) { const toLine = track.wrapS(pit.s0 + pit.funnel - s); allowed = Math.min(allowed, c.pitLim ? PIT.limit * 0.98 : toLine < 150 ? Math.sqrt(PIT.limit ** 2 + 2 * 18 * toLine) : Infinity); }
+    if (toBox < Infinity) allowed = Math.min(allowed, Math.sqrt(2 * 7 * Math.max(0, toBox - 0.6)));   // stop in the box
     let throttle = 1, brake = 0;
-    if (v > allowed * 1.04) { throttle = 0; brake = clamp((v - allowed) / 5, 0.25, 1); }
+    if (v > allowed * 1.04 || allowed < 0.3) { throttle = 0; brake = clamp((v - allowed) / 5, 0.25, 1); }
     else if (v > allowed * 0.97) throttle = 0.4;
 
     // drifting: commit to long bends, release as they open up
     const kNear = track.curvAt(s + 6 + v * 0.25);
-    if (L.drift && ctx.started) {
+    if (L.drift && ctx.started && !pitting) {
       if (!this.driftHeld && Math.abs(kNear) > 1 / 42 && v > 15) {
         this.driftHeld = true; o.driftPressed = true;
         steer = kNear > 0 ? -1 : 1;     // left turn (k>0) = steer left (-1)
@@ -93,7 +109,7 @@ export class BotBrain {
     o.throttle = throttle; o.brake = brake; o.steer = steer; o.drift = this.driftHeld;
 
     // ---- items
-    if (ctx.item && ctx.itemReady) {
+    if (ctx.item && ctx.itemReady && !pitting) {
       this.itemT += dt * L.items;
       const it = ctx.item, react = L.react, straight = kMax < 1 / 90;
       const a = ctx.ahead, b = ctx.behind;

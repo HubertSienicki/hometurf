@@ -5,6 +5,7 @@ import { NET, PHYS, CARS, ITEMS, ITEM_TUNE, ABILITY, BOT_LEVELS } from './sim/co
 import { Track } from './sim/track.js';
 import { makeCarState, stepCar, collideCars, placeCar, respawn, teleportAlong, applyBoost, stun } from './sim/physics.js';
 import { BotBrain } from './sim/ai.js';
+import { TYRE } from './sim/pit.js';
 import { ItemWorld, rollItem } from './sim/items.js';
 import { clamp, wrapAngle, lerp, lerpAngle, mulberry32, hashString } from './sim/util.js';
 
@@ -16,8 +17,11 @@ const r1 = v => Math.round(v * 10) / 10, r2 = v => Math.round(v * 100) / 100, r3
 // Flag bits shared in car snapshots.
 export const F = {
   DRIFT: 1, DRIFT_R: 2, TIER: 12, BOOST: 16, SHIELD: 32, STAR: 64, RAM: 128, MIRROR: 256, GHOST: 512,
-  SPIN: 1024, TUMBLE: 2048, BRAKE: 4096, FIN: 8192, TRICK: 16384, SLOW: 32768, WALL: 65536, INK: 131072,
+  SPIN: 1024, TUMBLE: 2048, BRAKE: 4096, FIN: 8192, TRICK: 16384, SLOW: 32768, WALL: 65536, INK: 131072, PIT: 262144,
 };
+
+// Pit stop quick-time event: one press per wheel while the marker crosses the green.
+const QTE = { sweep: 0.55, zone: 0.24, wait: { perfect: 0.12, good: 0.4, miss: 1.1 }, jack: 0.35 };
 
 export class Clock {
   constructor(isHost) { this.offset = 0; this.isHost = isHost; this.samples = []; }
@@ -167,6 +171,11 @@ export class Game {
     this.spectate = this.me ? null : sess.grid[0];
     this.acc = 0; this.beeped = 99; this.goT = (this.clock.now() - sess.startAt) / 1000;
     this.view.setTheme(sess.tod || 'day');
+    // pit-stop races: the pit lane opens and tyres wear; other races have neither
+    this.pits = !!(sess.pits && this.track.pit);
+    this.wear = this.pits ? TYRE.rates[sess.wear] ?? 1 : 0;
+    this.view.world?.setPitOpen?.(this.pits);
+    this.pitQ = null; this.hud.pitQTE(null);
     this.view.sessionStart(this.boxes, sess.items, sess.ghost);
     this.hud.sessionStart(this);
     this.audio.sessionStart?.();
@@ -221,6 +230,7 @@ export class Game {
     if (inp.itemP) this.edges.itemP = true;
     if (inp.abilityP) this.edges.abilityP = true;
     this.handleKeys(inp);
+    if (this.pitQ) this.pitQTE(dt, inp);
     // Missing the room's track (lost in transit, or joined mid-transfer)? Ask again.
     if (!this.isHost && this.room?.track && this.room.track.hash !== this.trackHash) {
       this.trackWait = (this.trackWait || 0) + dt;
@@ -317,7 +327,8 @@ export class Game {
       else if (!e.rsDone) this.rocketFire(e, ci);
       if (c.inkT > 0 && e.bot && !e.finished) ci.steer = clamp(ci.steer + Math.sin(this.now / 180 + e.order) * 0.6, -1, 1);
       e.prevP = c.P;
-      stepCar(c, ci, tr, dt, { allowDrive: started, topMul: this.topMul(e) });
+      stepCar(c, ci, tr, dt, { allowDrive: started, topMul: this.topMul(e), pits: this.pits, wear: this.wear });
+      if (e === this.me && this.wear && c.tyre > TYRE.cliff && !e.tyreWarned) { e.tyreWarned = true; this.hud.popup('TYRES GONE - BOX, BOX!', 'bad'); this.audio.sfx('deny'); }
       e.steerVis += (ci.steer - e.steerVis) * Math.min(1, dt * 12);
       e.brakeVis = ci.brake > 0.1 && c.vf > 1;
       this.carEvents(e);
@@ -395,6 +406,7 @@ export class Game {
     const ctx = this._bctx || (this._bctx = {});
     const c = e.c;
     ctx.started = started;
+    ctx.wantPit = this.botWantsPit(e);
     ctx.item = e.item; ctx.itemReady = !!e.item && e.roulette <= 0;
     ctx.ability = CARS[e.type].ability;
     ctx.abilityReady = started && this.session.abilities && e.ability >= 1;
@@ -427,6 +439,7 @@ export class Game {
     const c = e.c, me = e === this.me;
     for (const ev of c.ev) {
       if (typeof ev === 'string') {
+        if (ev === 'pitbox') { this.startPit(e); continue; }
         if (ev[0] === 'm' && ev[1] === 't') {
           const tier = +ev[2];
           e.ability = Math.min(1, e.ability + ABILITY.perTier * tier);
@@ -438,6 +451,7 @@ export class Game {
           else if (ev === 'trick') this.audio.sfx('trick');
           else if (ev === 'trickboost') { this.hud.popup('TRICK!', 'good'); this.audio.sfx('boost'); }
           else if (ev === 'hop') this.audio.sfx('hop');
+          else if (ev === 'pitdone') this.pitDone(e);
           else if (ev === 'perfect') { this.hud.popup('PERFECT SHIFT', 'shift'); this.audio.sfx('perfect'); }
           else if (ev === 'nodown') this.audio.sfx('deny');
           else if (ev.startsWith('tier')) this.audio.sfx('tier', { tier: +ev[4] });
@@ -450,6 +464,58 @@ export class Game {
       }
     }
     c.ev.length = 0;
+  }
+
+  // ---- pit stops: the crew changes tyres while you hit the quick-time event
+  startPit(e) {
+    const c = e.c;
+    if (c.pitT > 0) return;
+    if (e === this.me && !e.finished) {
+      c.pitT = 99;   // held until the crew is done
+      this.pitQ = { wheel: 0, x: 0, dir: 1, sweeps: 0, wait: 0, zone: this.qteZone(), res: [], t0: performance.now() };
+      this.audio.sfx('pitin');
+    } else c.pitT = 2.2 + this.rng() * 0.9 + (2 - (e.level ?? 1)) * 0.4;   // bots: a decent crew, better for better bots
+  }
+  qteZone() { const m = 0.3 + this.rng() * 0.45; return [m - QTE.zone / 2, m + QTE.zone / 2]; }
+  pitQTE(dt, inp) {
+    const q = this.pitQ, c = this.me?.c;
+    if (!c || !(c.pitT > 0)) { this.pitQ = null; this.hud.pitQTE(null); return; }
+    if (q.wheel < 4) {
+      if (q.wait > 0) {
+        q.wait -= dt;
+        if (q.wait <= 0) {
+          q.wheel++;
+          if (q.wheel >= 4) { c.pitT = QTE.jack; q.stop = (performance.now() - q.t0) / 1000 + QTE.jack; }
+          else { q.zone = this.qteZone(); q.x = 0; q.dir = 1; q.sweeps = 0; }
+        }
+      } else {
+        q.x += q.dir * dt / QTE.sweep;
+        if (q.x >= 1) { q.x = 1; q.dir = -1; q.sweeps++; } else if (q.x <= 0) { q.x = 0; q.dir = 1; q.sweeps++; }
+        if (inp.driftP || q.sweeps >= 4) {
+          const mid = (q.zone[0] + q.zone[1]) / 2, half = QTE.zone / 2, d = Math.abs(q.x - mid);
+          const r = !inp.driftP ? 'miss' : d <= half * 0.4 ? 'perfect' : d <= half ? 'good' : 'miss';
+          q.res.push(r); q.wait = QTE.wait[r];
+          this.audio.sfx(r === 'miss' ? 'deny' : 'qte', { r });
+        }
+      }
+    }
+    this.hud.pitQTE(q, this.input.usingPad);
+  }
+  pitDone(e) {
+    e.tyreWarned = false;
+    if (e !== this.me) return;
+    const q = this.pitQ, t = q?.stop;
+    this.pitQ = null; this.hud.pitQTE(null);
+    const perfect = q && q.res.every(r => r === 'perfect');
+    this.hud.popup(t ? `PIT STOP ${t.toFixed(1)} s${perfect ? ' - PERFECT' : ''}` : 'NEW TYRES', perfect ? 'shift' : 'good');
+    this.audio.sfx('pitout');
+  }
+  // Bots pit on worn tyres when there's racing left to make it pay.
+  botWantsPit(e) {
+    const c = e.c, s = this.session;
+    if (!this.wear || !this.pits || c.pitDone || c.tyre < 0.62) return false;
+    if (s.kind !== 'race') return true;
+    return s.laps - c.P / this.track.L > 0.9;
   }
 
   // ---- timing: start line + 2 splits per lap, interpolated to the millisecond
@@ -577,6 +643,7 @@ export class Game {
       c.drift = f & F.DRIFT ? (f & F.DRIFT_R ? 1 : -1) : 0; c.driftTier = (f & F.TIER) >> 2;
       c.stunT = f & (F.SPIN | F.TUMBLE) ? 1 : 0; c.stunKind = f & F.SPIN ? 'spin' : f & F.TUMBLE ? 'tumble' : '';
       c.trickT = f & F.TRICK ? 1 : 0;
+      c.inPit = (f & F.PIT) !== 0;
       if (f & F.FIN) e.finished = true;
     }
   }
@@ -598,6 +665,7 @@ export class Game {
     if (c.slowT > 0) f |= F.SLOW;
     if (c.wallT > 0) f |= F.WALL;
     if (c.inkT > 0) f |= F.INK;
+    if (c.inPit) f |= F.PIT;
     return f;
   }
 
@@ -825,7 +893,7 @@ export class Game {
 
   collisions() {
     const list = [];
-    for (const e of this.cars.values()) if (!(e.c.ghostT > 0) && !e.done) list.push(e);
+    for (const e of this.cars.values()) if (!(e.c.ghostT > 0) && !e.done && !e.c.inPit) list.push(e);   // no contact in the pit lane
     for (let i = 0; i < list.length; i++) {
       const a = list[i];
       if (!a.owned) continue;

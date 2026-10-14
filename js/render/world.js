@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import * as TX from './textures.js';
 import { PHYS } from '../sim/config.js';
 import { mulberry32, hashString, clamp } from '../sim/util.js';
+import { PIT, pitZone } from '../sim/pit.js';
 
 export const THEMES = {
   day: {
@@ -106,6 +107,21 @@ export function buildWorld(track, quality = 'high') {
     if (d < hw + 1.2 || (d < hw + 2.8 && j < i)) skipEdge[s][i] = 1;
   }
 
+  // ---- pit lane bookkeeping (sim/pit.js): what to leave out on that side
+  const pit = track.pit;
+  const pitTotal = pit ? 2 * pit.funnel + pit.straight : 0;
+  const inPitS = (s, pad = 0) => !!pit && track.wrapS(s - pit.s0 + pad) < pitTotal + 2 * pad;
+  const pitSideIdx = pit ? (pit.side > 0 ? 0 : 1) : -1;
+  const pitReach = hw + PIT.inner + 2 * PIT.laneHW + PIT.garage[1];
+  const tmpPit = {};
+  const inPitArea = (x, z, pad = 4) => {
+    if (!pit) return false;
+    const pr = track.projectGlobal(x, z, tmpPit);
+    if (!inPitS(pr.s, 12)) return false;
+    const v = pr.lat * pit.side;
+    return v > hw - 1 && v < pitReach + pad;
+  };
+
   // ---- ground
   const b = track.bounds;
   const cx = (b.minX + b.maxX) / 2, cz = (b.minZ + b.maxZ) / 2;
@@ -114,7 +130,12 @@ export function buildWorld(track, quality = 'high') {
   const groundColor = data.style === 'suburb' ? '#7d9a5c' : dense ? '#8c8a83' : '#86936c';
   const gtex = TX.groundTex(groundColor).clone(); gtex.needsUpdate = true;
   gtex.repeat.set(ext / 40, ext / 40);
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(ext, ext), M(new THREE.MeshStandardMaterial({ map: gtex, roughness: 1, metalness: 0 })));
+  // Flat map layers sit millimetres apart (ground 0 < park < water < side street < road 0.03), too
+  // close for the depth buffer when the lobby camera looks down from far away. Each lower layer is
+  // pushed back a few depth steps (units only: a slope-scaled factor grows at grazing angles and
+  // once pulled side streets over the race road far ahead).
+  const behind = units => ({ polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: units });
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(ext, ext), M(new THREE.MeshStandardMaterial({ map: gtex, roughness: 1, metalness: 0, ...behind(8) })));
   ground.rotation.x = -Math.PI / 2; ground.position.set(cx, 0, cz);
   ground.receiveShadow = shadows;
   group.add(ground);
@@ -152,9 +173,13 @@ export function buildWorld(track, quality = 'high') {
       if (skipEdge[s][i] || skipEdge[s][j]) continue;
       const sg = s === 0 ? 1 : -1;
       const out = [NX[i] * sg, 0, NZ[i] * sg];
+      // the pit side of the pit straight: the funnels are open, the pit wall replaces the barrier
+      const pitHere = s === pitSideIdx && inPitS(track.s[i], 2);
+      const pitFunnel = pitHere && (!inPitS(track.s[i] - pit.funnel) || inPitS(track.s[i] - pit.funnel - pit.straight));
       // curb
       const cc = corner ? ((Math.floor(track.s[i] / 2) % 2) ? red : white) : grey;
-      curb.quad(P(i, sg * hw, 0.05), P(j, sg * hw, 0.05), P(j, sg * (hw + PHYS.curbW), 0.07), P(i, sg * (hw + PHYS.curbW), 0.07), null, cc, UP);
+      if (!pitFunnel) curb.quad(P(i, sg * hw, 0.05), P(j, sg * hw, 0.05), P(j, sg * (hw + PHYS.curbW), 0.07), P(i, sg * (hw + PHYS.curbW), 0.07), null, cc, UP);
+      if (pitHere) continue;
       // barrier block
       const o1 = sg * (hw + PHYS.curbW), o2 = sg * (hw + PHYS.curbW + 0.45), H = 0.9;
       const block = Math.floor(track.s[i] / 4) % 2;
@@ -176,6 +201,108 @@ export function buildWorld(track, quality = 'high') {
   const walkMesh = new THREE.Mesh(walk.geometry(), M(new THREE.MeshStandardMaterial({ map: TX.concrete(), roughness: 0.95 })));
   walkMesh.receiveShadow = shadows;
   group.add(curbMesh, barMesh, walkMesh);
+
+  let pitShut = null;
+  // ---- pit lane: surface, lines, limiter lines, boxes, pit wall, barriers, garages, signs.
+  // Every edge comes from pitZone(), the same function the physics walls use.
+  if (pit) {
+    const side = pit.side, F = pit.funnel, S = pit.straight, LW = PIT.laneHW;
+    const D = hw + PIT.inner + LW, gFront = D + LW + PIT.garage[0], gBack = D + LW + PIT.garage[1];
+    const q = {}, za = {}, zb = {};
+    const at = (s, v, y) => { track.pointAt(s, q); return [q.x + q.nx * v * side, y, q.z + q.nz * v * side]; };
+    const outN = s => { track.pointAt(s, q); return [q.nx * side, 0, q.nz * side]; };
+    const lane = new Builder(), paint = new Builder(), yellow = new Builder(), wall = new Builder(), bar = new Builder(), gar = new Builder(), garTop = new Builder();
+    const shut = new Builder();      // closes the funnel mouths when the race has no pit stops
+    const wallW = new THREE.Color(0xf0efe9), wallTop = new THREE.Color(0xd8352f), barA2 = new THREE.Color(0xf4f4f0), barB2 = new THREE.Color(0x2c63c9);
+    const strip = (B, sa, sb, v1a, v2a, v1b, v2b, y, col) => B.quad(at(sa, v1a, y), at(sb, v1b, y), at(sb, v2b, y), at(sa, v2a, y), [[v1a / 4, sa / 4], [v1b / 4, sb / 4], [v2b / 4, sb / 4], [v2a / 4, sa / 4]], col, UP);
+    const step = 2;
+    for (let d = 0; d < pitTotal - 1e-6; d += step) {
+      const sa = pit.s0 + d, sb = pit.s0 + Math.min(pitTotal - 1e-3, d + step);
+      pitZone(track, pit, sa, za); pitZone(track, pit, sb, zb);
+      const apron = (z) => (z.region === 2 ? gFront : z.u + LW);
+      // surface (behind the main road where they overlap at the funnel mouths)
+      strip(lane, sa, sb, za.u - LW, apron(za), zb.u - LW, apron(zb), 0.027);
+      // white edge lines: outer all the way, inner along the pit straight
+      strip(paint, sa, sb, za.u + LW - 0.35, za.u + LW - 0.15, zb.u + LW - 0.35, zb.u + LW - 0.15, 0.04);
+      if (za.region === 2) strip(paint, sa, sb, za.u - LW + 0.15, za.u - LW + 0.35, zb.u - LW + 0.15, zb.u - LW + 0.35, 0.04);
+      // barrier on the outside of the funnels
+      if (za.region !== 2) {
+        // track-edge curb + barrier, shown only when the pit lane is closed
+        const o1 = hw + PHYS.curbW, o2 = o1 + 0.45, sh = 0.9, sc = Math.floor(d / 4) % 2 ? barB2 : barA2;
+        shut.quad(at(sa, hw, 0.05), at(sb, hw, 0.05), at(sb, o1, 0.07), at(sa, o1, 0.07), null, grey, UP);
+        shut.quad(at(sa, o1, 0), at(sb, o1, 0), at(sb, o1, sh), at(sa, o1, sh), null, sc, outN(sa).map(x => -x));
+        shut.quad(at(sa, o1, sh), at(sb, o1, sh), at(sb, o2, sh), at(sa, o2, sh), null, C.copy(sc).multiplyScalar(0.85), UP);
+        shut.quad(at(sa, o2, 0), at(sb, o2, 0), at(sb, o2, sh), at(sa, o2, sh), null, C.copy(sc).multiplyScalar(0.7), outN(sa));
+        const o1a = za.u + LW + 0.1, o2a = o1a + 0.45, o1b = zb.u + LW + 0.1, o2b = o1b + 0.45, H = 0.9;
+        const bc = Math.floor(d / 4) % 2 ? barB2 : barA2;
+        bar.quad(at(sa, o1a, 0), at(sb, o1b, 0), at(sb, o1b, H), at(sa, o1a, H), null, bc, outN(sa).map(x => -x));
+        bar.quad(at(sa, o1a, H), at(sb, o1b, H), at(sb, o2b, H), at(sa, o2a, H), null, C.copy(bc).multiplyScalar(0.85), UP);
+        bar.quad(at(sa, o2a, 0), at(sb, o2b, 0), at(sb, o2b, H), at(sa, o2a, H), null, C.copy(bc).multiplyScalar(0.7), outN(sa));
+      } else {
+        // pit wall between the track and the lane (physics wall: hw + curbW .. + 0.5)
+        const w1 = hw + PHYS.curbW, w2 = w1 + 0.5, H = 1.05;
+        wall.quad(at(sa, w1, 0), at(sb, w1, 0), at(sb, w1, H), at(sa, w1, H), null, wallW, outN(sa).map(x => -x));
+        wall.quad(at(sa, w1, H), at(sb, w1, H), at(sb, w2, H), at(sa, w2, H), null, wallTop, UP);
+        wall.quad(at(sa, w2, 0), at(sb, w2, 0), at(sb, w2, H), at(sa, w2, H), null, wallW, outN(sa));
+        // garages behind the apron
+        if (d >= F + 4 && d + step <= F + S - 4) {
+          const GH = 5.4, u0 = (d - F) / 8, u1 = (d + step - F) / 8;
+          gar.quad(at(sa, gFront, 0), at(sb, gFront, 0), at(sb, gFront, GH), at(sa, gFront, GH), [[u0, 0], [u1, 0], [u1, 1], [u0, 1]], null, outN(sa).map(x => -x));
+          garTop.quad(at(sa, gFront, GH), at(sb, gFront, GH), at(sb, gBack, GH), at(sa, gBack, GH), null, null, UP);
+          garTop.quad(at(sa, gBack, 0), at(sb, gBack, 0), at(sb, gBack, GH), at(sa, gBack, GH), null, null, outN(sa));
+        }
+      }
+    }
+    // wall noses and garage ends
+    for (const [dd, dir] of [[F, -1], [F + S, 1]]) {
+      const s = pit.s0 + dd, w1 = hw + PHYS.curbW, w2 = w1 + 0.5;
+      track.pointAt(s, q);
+      wall.quad(at(s, w1, 0), at(s, w2, 0), at(s, w2, 1.05), at(s, w1, 1.05), null, wallTop, [q.tx * dir, 0, q.tz * dir]);
+      const sg = pit.s0 + dd - dir * 4;
+      garTop.quad(at(sg, gFront, 0), at(sg, gBack, 0), at(sg, gBack, 5.4), at(sg, gFront, 5.4), null, null, [q.tx * dir, 0, q.tz * dir]);
+      // limiter line across the lane
+      strip(paint, s - 0.3, s + 0.3, D - LW + 0.2, D + LW - 0.2, D - LW + 0.2, D + LW - 0.2, 0.041);
+    }
+    // three painted pit boxes on the outer half of the lane
+    const bc0 = F + S / 2 - PIT.boxLen / 2, bl = PIT.boxLen / 3;
+    for (let k = 0; k < 3; k++) {
+      const a = pit.s0 + bc0 + k * bl + 0.6, c2 = a + bl - 1.2, v1 = D - 0.4, v2 = D + LW - 0.55, t = 0.22;
+      strip(yellow, a, c2, v1, v1 + t, v1, v1 + t, 0.042); strip(yellow, a, c2, v2 - t, v2, v2 - t, v2, 0.042);
+      strip(yellow, a, a + t, v1, v2, v1, v2, 0.042); strip(yellow, c2 - t, c2, v1, v2, v1, v2, 0.042);
+    }
+    const laneMat = M(new THREE.MeshStandardMaterial({ map: TX.asphaltPlain(), color: 0xc9c9cc, roughness: 0.9, ...behind(1) }));
+    const lm = new THREE.Mesh(lane.geometry(), laneMat); lm.receiveShadow = shadows;
+    group.add(lm, new THREE.Mesh(paint.geometry(), M(new THREE.MeshBasicMaterial({ color: 0xf2f2f2 }))), new THREE.Mesh(yellow.geometry(), M(new THREE.MeshBasicMaterial({ color: 0xffd23f }))));
+    for (const [B, mat] of [[wall, { vertexColors: true, roughness: 0.7 }], [bar, { vertexColors: true, roughness: 0.6 }]]) {
+      if (B.empty) continue;
+      const m = new THREE.Mesh(B.geometry(), M(new THREE.MeshStandardMaterial(mat)));
+      m.castShadow = m.receiveShadow = shadows; group.add(m);
+    }
+    if (!shut.empty) {
+      pitShut = new THREE.Mesh(shut.geometry(), M(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6 })));
+      pitShut.castShadow = pitShut.receiveShadow = shadows; group.add(pitShut);
+    }
+    if (!gar.empty) {
+      const gm = new THREE.Mesh(gar.geometry(), M(new THREE.MeshStandardMaterial({ map: TX.garage(), roughness: 0.7 })));
+      const gt = new THREE.Mesh(garTop.geometry(), M(new THREE.MeshStandardMaterial({ color: 0xb9bcc4, roughness: 0.8 })));
+      gm.castShadow = gt.castShadow = shadows; gm.receiveShadow = gt.receiveShadow = shadows;
+      group.add(gm, gt);
+    }
+    // speed limit at the limiter line, "end" at the exit
+    const poleM2 = M(new THREE.MeshStandardMaterial({ color: 0x9aa0aa, metalness: 0.4, roughness: 0.5 }));
+    for (const [dd, text] of [[F - 3, String(PIT.limitKmh)], [F + S + 3, 'END']]) {
+      const z = pitZone(track, pit, pit.s0 + dd), v = z.u + LW + 1.0;
+      const [x, , zz] = at(pit.s0 + dd, v, 0);
+      track.pointAt(pit.s0 + dd, q);
+      const sg = new THREE.Group();
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.6, 6), poleM2); pole.position.y = 1.3;
+      const disc = new THREE.Mesh(new THREE.CircleGeometry(0.55, 24), M(new THREE.MeshBasicMaterial({ map: TX.speedSign(text), toneMapped: false })));
+      disc.position.y = 2.8; disc.rotation.y = Math.PI;      // faces drivers coming up the lane
+      sg.add(pole, disc);
+      sg.position.set(x, 0, zz); sg.rotation.y = Math.atan2(q.tx, q.tz);
+      group.add(sg);
+    }
+  }
 
   // ---- start line, grid boxes, gantry
   const sp0 = track.pointAt(0);
@@ -206,17 +333,22 @@ export function buildWorld(track, quality = 'high') {
     gantry.position.set(sp0.x, 0, sp0.z);
     gantry.rotation.y = sp0.h;
     const span = hw + PHYS.curbW + 1.6;
+    // on the pit side the gantry reaches over the pit lane when the line crosses it
+    const z0 = pit && pitZone(track, pit, 0);
+    const reach = z0 ? z0.u + PIT.laneHW + (z0.region === 2 ? PIT.garage[0] * 0.6 : 1.2) : span;
+    const spanL = pit?.side > 0 ? Math.max(span, reach) : span, spanR = pit?.side < 0 ? Math.max(span, reach) : span;
+    const mid = (spanL - spanR) / 2, width = spanL + spanR;
     const steel = M(new THREE.MeshStandardMaterial({ color: 0x2a2e38, roughness: 0.5, metalness: 0.6 }));
-    for (const s of [-1, 1]) {
+    for (const x of [spanL, -spanR]) {
       const p = new THREE.Mesh(new THREE.BoxGeometry(0.8, 7.6, 0.8), steel);
-      p.position.set(s * span, 3.8, 0); p.castShadow = shadows; gantry.add(p);
+      p.position.set(x, 3.8, 0); p.castShadow = shadows; gantry.add(p);
     }
-    const beam = new THREE.Mesh(new THREE.BoxGeometry(span * 2 + 0.8, 1.5, 1.0), steel);
-    beam.position.set(0, 7.6, 0); beam.castShadow = shadows; gantry.add(beam);
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(width + 0.8, 1.5, 1.0), steel);
+    beam.position.set(mid, 7.6, 0); beam.castShadow = shadows; gantry.add(beam);
     const ban = M(new THREE.MeshBasicMaterial({ map: TX.banner('HOME TURF'), toneMapped: false }));
     for (const s of [-1, 1]) {
-      const pl = new THREE.Mesh(new THREE.PlaneGeometry(span * 2, span * 2 / 8), ban);
-      pl.position.set(0, 7.6, s * 0.52); pl.rotation.y = s > 0 ? 0 : Math.PI;
+      const pl = new THREE.Mesh(new THREE.PlaneGeometry(width, width / 8), ban);
+      pl.position.set(mid, 7.6, s * 0.52); pl.rotation.y = s > 0 ? 0 : Math.PI;
       gantry.add(pl);
     }
     for (let k = 0; k < 4; k++) {
@@ -233,7 +365,8 @@ export function buildWorld(track, quality = 'high') {
   // ---- grandstand + flags along the start straight
   const stands = [];
   {
-    const side = rng() < 0.5 ? 1 : -1;
+    const coin = rng() < 0.5 ? 1 : -1;
+    const side = pit ? -pit.side : coin;      // never on top of the pit lane
     const s0 = -70, s1 = -12;
     const sb = new Builder();
     const ct = TX.crowdTex();
@@ -263,7 +396,7 @@ export function buildWorld(track, quality = 'high') {
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(1, 1, 1), pp = new THREE.Vector3();
     const fcols = [0xff3b3b, 0xffd23f, 0x2f8cff, 0x3ddc84, 0xff4fd8, 0xff8a1f];
     for (let k = 0; k < cnt; k++) {
-      const s = -60 + (k >> 1) * 11, sd = k % 2 ? -side : -side;
+      const s = -60 + (k >> 1) * 11, sd = pit ? side : -side;
       const p = track.pointAt(s + (k % 2) * 5.5);
       const o = sd * (hw + 4.2);
       pp.set(p.x + p.nx * o, 0, p.z + p.nz * o);
@@ -379,6 +512,7 @@ export function buildWorld(track, quality = 'high') {
     for (let s = 10, k = 0; s < track.L - 5; s += 34, k++) {
       const p = track.pointAt(s), side = k % 2 ? 1 : -1;
       if (skipEdge[side > 0 ? 0 : 1][p.i]) continue;
+      if (pit && side === pit.side && inPitS(s, 8)) continue;
       spots.push([p, side]);
     }
     const poleG = new THREE.CylinderGeometry(0.11, 0.14, 7.2, 6); poleG.translate(0, 3.6, 0);
@@ -420,10 +554,7 @@ export function buildWorld(track, quality = 'high') {
       }
     }
     if (!bld.empty) {
-      // Flat map layers are stacked by height only (ground 0 < park < water < side street < road 0.03).
-      // No polygonOffset: a slope-scaled offset grows with distance at a low camera and pulled
-      // side streets over the race road far ahead, hiding its lines behind a grey patch.
-      const m = new THREE.Mesh(bld.geometry(), M(new THREE.MeshStandardMaterial({ map: TX.asphaltPlain(), roughness: 0.95 })));
+      const m = new THREE.Mesh(bld.geometry(), M(new THREE.MeshStandardMaterial({ map: TX.asphaltPlain(), roughness: 0.95, ...behind(2) })));
       m.receiveShadow = shadows;
       group.add(m);
     }
@@ -454,8 +585,8 @@ export function buildWorld(track, quality = 'high') {
     m.receiveShadow = shadows;
     group.add(m);
   };
-  polyMesh(scen.g || [], M(new THREE.MeshStandardMaterial({ map: TX.groundTex('#5f9a45'), roughness: 1 })), 0.005);
-  const waterMat = M(new THREE.MeshStandardMaterial({ color: 0x2e6f9e, roughness: 0.15, metalness: 0.25 }));
+  polyMesh(scen.g || [], M(new THREE.MeshStandardMaterial({ map: TX.groundTex('#5f9a45'), roughness: 1, ...behind(6) })), 0.005);
+  const waterMat = M(new THREE.MeshStandardMaterial({ color: 0x2e6f9e, roughness: 0.15, metalness: 0.25, ...behind(4) }));
   polyMesh(scen.w || [], waterMat, 0.01);
 
   // ---- trees
@@ -471,7 +602,7 @@ export function buildWorld(track, quality = 'high') {
     const tmp = {};
     for (let i = 0; i + 1 < scen.t.length && k < cnt; i += 2) {
       const x = scen.t[i], z = scen.t[i + 1];
-      if (track.projectGlobal(x, z, tmp).d < hw + 3) continue;
+      if (track.projectGlobal(x, z, tmp).d < hw + 3 || inPitArea(x, z)) continue;
       const s = 0.8 + rng() * 0.7;
       pp.set(x, 0, z); q.setFromAxisAngle(V.set(0, 1, 0), rng() * 6.28); sc.set(s, s * (0.9 + rng() * 0.3), s);
       m4.compose(pp, q, sc);
@@ -484,7 +615,9 @@ export function buildWorld(track, quality = 'high') {
     group.add(trunks, crowns);
   }
 
-  // ---- buildings: one merged mesh for walls (windows) and one for roofs
+  // ---- buildings: one merged mesh for walls (windows) and one for roofs.
+  // Map heights are a starting point, not gospel: real blocks look like stubs from a race
+  // camera, so everything is a bit taller, houses get pitched roofs and flat roofs a parapet.
   const facadeMat = M(new THREE.MeshStandardMaterial({ map: TX.facade(), vertexColors: true, roughness: 0.75, metalness: 0.05, emissiveMap: TX.facadeLit(), emissive: 0xffffff, emissiveIntensity: 0 }));
   const roofMat = M(new THREE.MeshStandardMaterial({ map: TX.roofTex(), vertexColors: true, roughness: 0.9 }));
   {
@@ -494,11 +627,12 @@ export function buildWorld(track, quality = 'high') {
     let count = 0;
     for (const rec of scen.b || []) {
       if (count > 4000) break;
-      const h = rec[0], type = rec[1] | 0;
+      const type = rec[1] | 0;
+      const h = type === 5 ? Math.max(3.5, rec[0] * 1.15 + 0.6) : Math.max(type === 0 ? 7 : 9, rec[0] * 1.3 + 2.5);
       const pts = [];
       for (let i = 2; i + 1 < rec.length; i += 2) pts.push([rec[i], rec[i + 1]]);
       if (pts.length < 3) continue;
-      if (pts.some(([x, z]) => track.projectGlobal(x, z, tmp).d < hw + 3.5 || inStand(x, z))) continue;
+      if (pts.some(([x, z]) => track.projectGlobal(x, z, tmp).d < hw + 3.5 || inStand(x, z) || inPitArea(x, z))) continue;
       count++;
       const pal = PALETTES[type] || PALETTES[1];
       const col = C.set(pal[Math.floor(rng() * pal.length)]).clone();
@@ -506,24 +640,47 @@ export function buildWorld(track, quality = 'high') {
       let area = 0;
       for (let i = 0; i < pts.length; i++) { const a = pts[i], c = pts[(i + 1) % pts.length]; area += a[0] * c[1] - c[0] * a[1]; }
       const sgn = area > 0 ? 1 : -1;
+      area = Math.abs(area) / 2;
+      // small convex footprints (houses, sheds, little shops) get a hipped roof
+      let convex = pts.length <= 8;
+      for (let i = 0; convex && i < pts.length; i++) {
+        const a = pts[i], b2 = pts[(i + 1) % pts.length], c2 = pts[(i + 2) % pts.length];
+        if (((b2[0] - a[0]) * (c2[1] - b2[1]) - (b2[1] - a[1]) * (c2[0] - b2[0])) * sgn < -1e-6) convex = false;
+      }
+      const pitched = convex && area < 320 && (type === 0 || type === 5 || h < 13);
+      const parapet = !pitched && h > 11 ? 0.9 : 0;
+      const top = h + parapet;
       let u = rng() * 8;
-      const vTop = h / 12;
+      const vTop = top / 12;
+      const rc = C.set(ROOFS[type]?.[Math.floor(rng() * ROOFS[type].length)] ?? 0x666666).clone();
       for (let i = 0; i < pts.length; i++) {
         const a = pts[i], c = pts[(i + 1) % pts.length];
         const dx = c[0] - a[0], dz = c[1] - a[1], len = Math.hypot(dx, dz);
         if (len < 0.05) continue;
         const outN = [sgn * dz / len, 0, -sgn * dx / len];
         const u1 = u + len / 8;
-        walls.quad([a[0], 0, a[1]], [c[0], 0, c[1]], [c[0], h, c[1]], [a[0], h, a[1]], [[u, 0], [u1, 0], [u1, vTop], [u, vTop]], col, outN);
+        walls.quad([a[0], 0, a[1]], [c[0], 0, c[1]], [c[0], top, c[1]], [a[0], top, a[1]], [[u, 0], [u1, 0], [u1, vTop], [u, vTop]], col, outN);
+        // inside face of the parapet, roof-coloured, so the rim reads from above
+        if (parapet) roofs.quad([a[0], h, a[1]], [c[0], h, c[1]], [c[0], top, c[1]], [a[0], top, a[1]], null, C.copy(rc).multiplyScalar(0.8), [-outN[0], 0, -outN[2]]);
         u = u1;
       }
-      const v2 = pts.map(p => new THREE.Vector2(p[0], p[1]));
-      let tris = [];
-      try { tris = THREE.ShapeUtils.triangulateShape(v2, []); } catch { tris = []; }
-      const rc = C.set(ROOFS[type]?.[Math.floor(rng() * ROOFS[type].length)] ?? 0x666666).clone();
-      for (const t of tris) {
-        const A = pts[t[0]], B = pts[t[1]], Cc = pts[t[2]];
-        roofs.tri([A[0], h, A[1]], [B[0], h, B[1]], [Cc[0], h, Cc[1]], [A[0] / 10, A[1] / 10], [B[0] / 10, B[1] / 10], [Cc[0] / 10, Cc[1] / 10], rc, UP);
+      if (pitched) {
+        let mx = 0, mz = 0;
+        for (const p of pts) { mx += p[0]; mz += p[1]; }
+        mx /= pts.length; mz /= pts.length;
+        const apex = [mx, h + Math.min(4.5, 0.42 * Math.sqrt(area)), mz];
+        for (let i = 0; i < pts.length; i++) {
+          const a = pts[i], c = pts[(i + 1) % pts.length];
+          roofs.tri([a[0], h, a[1]], [c[0], h, c[1]], apex, [a[0] / 6, a[1] / 6], [c[0] / 6, c[1] / 6], [mx / 6, mz / 6], rc, UP);
+        }
+      } else {
+        const v2 = pts.map(p => new THREE.Vector2(p[0], p[1]));
+        let tris = [];
+        try { tris = THREE.ShapeUtils.triangulateShape(v2, []); } catch { tris = []; }
+        for (const t of tris) {
+          const A = pts[t[0]], B = pts[t[1]], Cc = pts[t[2]];
+          roofs.tri([A[0], h, A[1]], [B[0], h, B[1]], [Cc[0], h, Cc[1]], [A[0] / 10, A[1] / 10], [B[0] / 10, B[1] / 10], [Cc[0] / 10, Cc[1] / 10], rc, UP);
+        }
       }
     }
     if (!walls.empty) {
@@ -531,7 +688,7 @@ export function buildWorld(track, quality = 'high') {
       wm.castShadow = shadows; wm.receiveShadow = shadows;
       group.add(wm);
     }
-    if (!roofs.empty) group.add(new THREE.Mesh(roofs.geometry(), roofMat));
+    if (!roofs.empty) { const rm = new THREE.Mesh(roofs.geometry(), roofMat); rm.castShadow = shadows; group.add(rm); }
   }
 
   // ------------------------------------------------------------ api
@@ -539,6 +696,7 @@ export function buildWorld(track, quality = 'high') {
   return {
     group, boxes, lights,
     center: { x: cx, z: cz }, radius: Math.max(b.maxX - b.minX, b.maxZ - b.minZ) / 2,
+    setPitOpen(open) { if (pitShut) pitShut.visible = !open; },
     applyTheme(th) {
       facadeMat.emissiveIntensity = th.windows;
       lampHeads.emissiveIntensity = th.lamps;

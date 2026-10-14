@@ -403,7 +403,8 @@ export class View {
     cs.look.set(c.x, 0, c.z);
     cs.fov = 55;
     this.applyCam(cs, true);
-    this.followLights(c.x, c.z, 0, 0, Math.max(160, r * 1.2));
+    // Shadows only near the middle: a map-sized shadow box is too coarse and shimmers as we orbit.
+    this.followLights(c.x, c.z, 0, 0, 160);
   }
 
   applyCam(cs, noShake) {
@@ -479,7 +480,12 @@ export class View {
       this.renderer.render(gr.scene, gr.cam);
       return;
     }
-    if (this.mode === 'lobby' || this.mode === 'menu') this.orbit(dt);
+    const orbiting = this.mode === 'lobby' || this.mode === 'menu';
+    if (orbiting) this.orbit(dt);
+    // The orbit camera is hundreds of metres out: a far-off near plane buys the depth
+    // precision that keeps millimetre-thin map layers from flickering.
+    const near = orbiting && this.world ? 8 : 0.3;
+    if (this.camera.near !== near) { this.camera.near = near; this.camera.updateProjectionMatrix(); }
     this.world?.update(dt, this.camera);
     this.fx.update(dt);
     if (this.flashT > 0) { this.flashT -= dt; this.skyU.flash.value = Math.max(0, this.flashT) * 1.5; }

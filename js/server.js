@@ -6,6 +6,7 @@
 import { VERSION } from './version.js';
 import { NET, DEFAULT_SETTINGS, BOT_NAMES, CAR_IDS, PAINT, POINTS, BOT_LEVELS } from './sim/config.js';
 import { PARTS, SLOTS, LIVERIES, sanitizeBuild } from './sim/parts.js';
+import { Track } from './sim/track.js';
 
 const now = () => performance.now();
 const HOST = 'p0';
@@ -175,11 +176,13 @@ export class HostServer {
   }
 
   setTrack(data) {
+    // the host plans the pit lane once and it travels with the track, so every player drives the same one
+    if (data.pit === undefined) data.pit = new Track(data).pit;
     this.track = data;
     this.trackStr = JSON.stringify(data);
     this.trackMeta = {
       id: data.id, name: data.name, len: data.len, author: data.author || '', width: data.width, preset: data.preset || null,
-      origin: data.origin || null, hash: `${data.id}:${this.trackStr.length}`,
+      origin: data.origin || null, hash: `${data.id}:${this.trackStr.length}`, pit: !!data.pit,
       pts: thin(data.pts, 120),
     };
     for (const id of this.players.keys()) if (!this.players.get(id).bot) this.sendTrack(id);
@@ -216,7 +219,7 @@ export class HostServer {
       endAt: kind === 'race' ? null : now() + 5200 + (kind === 'quali' ? s.qualiMin : s.practiceMin) * 60000,
       laps: s.laps, items: s.items && kind !== 'quali', abilities: s.abilities && kind !== 'quali',
       ghost: kind === 'quali', collisions: s.collisions, catchup: s.catchup && kind === 'race', equalize: !s.upgrades,
-      tod: s.tod, state: 'run', flagAt: null, finishBy: null,
+      tod: s.tod, pits: !!s.pitstops, wear: s.tyreWear, state: 'run', flagAt: null, finishBy: null,
     };
     this.timing = {};
     for (const id of grid) this.timing[id] = { laps: 0, best: null, last: null, bestSecs: [null, null, null], cur: [null, null, null], fin: false, total: null, done: false, hits: 0 };

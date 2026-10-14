@@ -12,6 +12,7 @@ import { HostServer } from './server.js';
 import { HostNet, ClientNet, randomCode, normalizeCode, probePublicRooms, claimPublicSlot } from './net.js';
 import { NET } from './sim/config.js';
 import { VERSION, BUILD } from './version.js';
+import { Account } from './account.js';
 import { PRESETS, buildPreset } from './sim/presets.js';
 
 const $ = id => document.getElementById(id);
@@ -27,8 +28,9 @@ catch (err) {
 }
 const hud = new HUD(profile);
 
+const account = new Account(profile, store);
 const app = {
-  profile, store, audio, view, input, hud,
+  profile, store, audio, view, input, hud, account,
   server: null, net: null, game: null, isHost: false, myId: null, room: null, attract: null,
   inSession() { return !!(this.game?.session && this.room?.phase === 'session'); },
 };
@@ -331,6 +333,11 @@ if (BUILD.commit !== 'dev') {
 }
 // First start after an update: point at what changed.
 if (profile.d.seenVersion && profile.d.seenVersion !== VERSION) setTimeout(() => ui.toast(`Updated to v${VERSION} - see the Changelog in the main menu.`, 'good'), 1500);
+
+// Accounts: pull the latest copy at start-up; refresh what shows the profile when it changes.
+account.onChange = () => { if (ui.current === 's-menu') ui.renderMenu(); if (ui.current === 's-account') ui.renderAccount(); };
+account.onProfile = () => { app.sendProfile(); $('fps').classList.toggle('hidden', !profile.settings.showFps); if (ui.current === 's-menu') ui.renderMenu(); };
+if (account.signedIn) account.sync().catch(err => console.warn('[account]', err.message));
 
 ui.show('s-title');
 startAttract();

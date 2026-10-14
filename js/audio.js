@@ -542,6 +542,9 @@ export class Audio {
       case 'hop': this.noise(0.08, { vol: 0.08, brown: true, freq: 300 }); break;
       case 'perfect': this.tone(1180, 0.07, { vol: 0.05, slide: 600 }); this.tone(2360, 0.05, { vol: 0.015, delay: 0.03 }); break;
       case 'deny': this.tone(150, 0.12, { type: 'square', vol: 0.03 }); break;
+      case 'pitin': for (let i = 0; i < 3; i++) this.noise(0.07, { vol: 0.14, freq: 2600, type: 'bandpass', q: 2, delay: 0.25 + i * 0.09 }); break;
+      case 'qte': for (let i = 0; i < (o.r === 'perfect' ? 4 : 6); i++) this.noise(0.05, { vol: 0.16, freq: o.r === 'perfect' ? 3200 : 2400, type: 'bandpass', q: 2.5, delay: i * 0.045 }); if (o.r === 'perfect') this.tone(1560, 0.08, { vol: 0.04 }); break;
+      case 'pitout': this.noise(0.5, { vol: 0.12, freq: 500, slide: 1800, type: 'bandpass', q: 0.8 }); break;
       case 'land': this.tone(70, 0.25, { vol: 0.35, slide: -30 }); this.noise(0.2, { vol: 0.2, brown: true, freq: 500 }); this.noise(0.18, { vol: 0.06, freq: 1300, type: 'bandpass', q: 6 }); break;
       case 'ramp': this.noise(0.5, { vol: 0.1, freq: 600, slide: 900, type: 'bandpass', q: 0.8 }); break;
       case 'trick': this.noise(0.4, { vol: 0.12, freq: 500, slide: 1500, type: 'bandpass', q: 1 }); break;

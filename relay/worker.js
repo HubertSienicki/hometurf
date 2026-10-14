@@ -1,4 +1,6 @@
-// HOME TURF relay: the fallback for players whose network blocks direct
+// HOME TURF server: the room relay below, plus accounts (accounts.js).
+//
+// Relay: the fallback for players whose network blocks direct
 // browser-to-browser (WebRTC) links: mobile data, CGNAT, strict routers.
 // It runs on Cloudflare Workers with one Durable Object per room code, and it
 // only forwards text frames between the host's browser and its guests.
@@ -12,6 +14,7 @@
 // Guest <-> relay  the payload itself
 // Relay -> anyone  "!ok" attached, "!taken" room code in use, "!none" no such room, "!full" room full
 import { DurableObject } from 'cloudflare:workers';
+export { Accounts } from './accounts.js';
 
 const MAX_FRAME = 256 * 1024;
 const MAX_GUESTS = 16;
@@ -24,13 +27,22 @@ const ORIGINS = [
 ];
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
 
+const API_CORS = { ...CORS, 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Max-Age': '86400' };
+
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
-    const m = /^\/room\/([a-z0-9-]{3,48})(\/info)?$/.exec(url.pathname);
-    if (!m) return new Response('HOME TURF relay\n', { headers: CORS });
     const origin = req.headers.get('Origin');
     if (origin && !ORIGINS.some(r => r.test(origin))) return new Response('forbidden', { status: 403 });
+    if (url.pathname.startsWith('/api/')) {
+      if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: API_CORS });
+      const res = await env.ACCOUNTS.get(env.ACCOUNTS.idFromName('main')).fetch(req);
+      const out = new Response(res.body, res);
+      for (const [k, v] of Object.entries(API_CORS)) out.headers.set(k, v);
+      return out;
+    }
+    const m = /^\/room\/([a-z0-9-]{3,48})(\/info)?$/.exec(url.pathname);
+    if (!m) return new Response('HOME TURF server\n', { headers: CORS });
     return env.ROOMS.get(env.ROOMS.idFromName(m[1])).fetch(req);
   },
 };

@@ -2,6 +2,7 @@
 import { ITEM_ICONS, ABILITY_ICONS } from './icons.js';
 import { ITEMS, ABILITIES, CARS, ITEM_TUNE, SPEEDO } from '../sim/config.js';
 import { GEARBOX, gearLabel } from '../sim/drivetrain.js';
+import { PIT, TYRE, pitZone, boxCentre } from '../sim/pit.js';
 import { fmtTime, ordinal, escapeHtml, clamp } from '../sim/util.js';
 
 const $ = id => document.getElementById(id);
@@ -134,6 +135,8 @@ export class HUD {
       const mph = this.profile.settings.units === 'mph';
       $('h-speed').innerHTML = `<b>${Math.round(mph ? kmh * 0.621 : kmh)}</b><i>${mph ? 'mph' : 'km/h'}</i>`;
       this.tach(c, focus === me && !!c.manual);
+      this.tyres(c, game.wear > 0);
+      this.pitInfo(game, focus);
       const ch = $('h-charge');
       const T = [0.7, 1.5, 2.4];
       const tier = c.driftTier || 0;
@@ -321,6 +324,55 @@ export class HUD {
     if (gearEl.textContent !== label) gearEl.textContent = label;
     gearEl.dataset.s = r >= 0.985 && geared ? 'limit' : inWin ? 'go' : '';
     $('h-rpm').textContent = `${(Math.round(rpm / 50) * 50).toLocaleString()} rpm${geared ? (manual ? ' · MANUAL' : ' · AUTO') : ''}`;
+  }
+
+  // Tyre wear: four wheels from green to red, and the grip left.
+  tyres(c, on) {
+    const el = this.tyEl || (this.tyEl = $('h-tyres'));
+    el.classList.toggle('hidden', !on);
+    if (!on) return;
+    const w = c.tyre || 0;
+    if (Math.abs(w - (this.tyW ?? -1)) < 0.004) return;
+    this.tyW = w;
+    [1.06, 1.06, 0.94, 0.94].forEach((k, i) => {
+      const x = clamp(w * k, 0, 1);
+      el.querySelectorAll('i')[i].style.background = `hsl(${Math.round(125 * (1 - x) ** 1.3)}, 80%, ${50 - 8 * x}%)`;
+    });
+    el.querySelector('b').textContent = `${Math.round((1 - w) * 100)}%`;
+    el.classList.toggle('worn', w > TYRE.cliff);
+  }
+
+  // Pit lane prompts: where the entry is when the tyres are gone, the limiter, the box.
+  pitInfo(game, focus) {
+    const el = this.pitEl || (this.pitEl = $('h-pit')), c = focus.c, pit = game.pits ? game.track?.pit : null;
+    let html = '';
+    if (pit && focus.owned && !focus.finished) {
+      const z = pitZone(game.track, pit, c.lastS, this._pz || (this._pz = {}));
+      if (c.pitT > 0) html = '';
+      else if (c.pitLim) {
+        const toBox = game.track.wrapS(boxCentre(game.track, pit) - c.lastS);
+        html = `<span class="lim">PIT LIMITER ${PIT.limitKmh}</span>`;
+        if (!c.pitDone && game.wear > 0 && toBox < 200) html += `<span class="box">${toBox < 12 ? 'STOP IN THE BOX' : `BOX IN ${Math.round(toBox)} m`}</span>`;
+      } else if (c.inPit) html = `<span class="lim">PIT LANE</span>`;
+      else if (!z && game.wear > 0 && c.tyre > 0.5) {
+        const d = game.track.wrapS(pit.s0 - c.lastS);
+        if (d < 300) html = `<span class="box">PIT ENTRY ${pit.side > 0 ? '&larr; LEFT' : 'RIGHT &rarr;'} ${Math.round(d)} m</span>`;
+      }
+    }
+    if (html !== this.pitHtml) { this.pitHtml = html; el.innerHTML = html; el.classList.toggle('hidden', !html); }
+  }
+
+  // Pit stop quick-time event (state from game.pitQTE).
+  pitQTE(q, pad) {
+    const el = this.qEl || (this.qEl = $('h-qte'));
+    if (!q) { el.classList.add('hidden'); return; }
+    el.classList.remove('hidden');
+    el.querySelectorAll('.q-wheels span').forEach((s, i) => { s.className = q.res[i] || (i === q.wheel ? 'now' : ''); });
+    const zone = el.querySelector('.q-zone'), mark = el.querySelector('.q-mark');
+    zone.style.left = `${q.zone[0] * 100}%`; zone.style.width = `${(q.zone[1] - q.zone[0]) * 100}%`;
+    mark.style.left = `${q.x * 100}%`;
+    el.classList.toggle('done', q.wheel >= 4);
+    $('q-hint').textContent = q.wheel >= 4 ? 'Dropping the car...' : `Press ${pad ? 'RB' : 'SPACE'} in the green`;
   }
 
   popup(text, cls = '') {

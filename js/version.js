@@ -2,12 +2,23 @@
 // Changelog screen, CHANGELOG.md and dist/version.json (both written by
 // `npm run build`). To release: bump VERSION, add an entry on top, build,
 // commit, then `git tag vX.Y.Z` (see README).
-export const VERSION = '1.3.1';
+export const VERSION = '1.4.0';
 
 // Filled in by scripts/build.mjs from git; 'dev' when served from source.
 export const BUILD = { commit: 'dev', date: '' };
 
 export const CHANGELOG = [
+  {
+    v: '1.4.0', date: '2026-10-14', title: 'Accounts and pit stops',
+    items: [
+      'Accounts: create one with a username and password (no email) and your level, credits, garage, settings and saved tracks are stored online. Sign in on any device to pick up where you left off.',
+      'Pit-stop races (race setting, on loops of 1.5 km or more): tyres wear and lose grip, and there is a real pit lane beside the main straight with a 120 km/h limiter, painted boxes and garages.',
+      'Stop in a box and the crew changes all four tyres: hit SPACE (or RB) in the green for each wheel. Good timing means a quick stop. Bots pit too when their tyres are gone.',
+      'Tyre gauge on the HUD in pit-stop races. Normal races have no tyre wear and the pit lane stays closed.',
+      'Fixed: the lobby view flickered (roads, side streets and the ground fighting each other).',
+      'Buildings are taller, houses have pitched roofs and tall blocks a parapet, so the city no longer looks cut off.',
+    ],
+  },
   {
     v: '1.3.1', date: '2026-10-14', title: 'Relay switched on',
     items: ['The relay server is live, so friends whose network blocks direct connections can join rooms.'],

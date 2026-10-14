@@ -35,9 +35,12 @@ npm run deploy
 
 That runs `npm run build` and `netlify deploy --prod`. The build copies only the game files (`index.html`, `style.css`, `favicon.svg`, `js/`, `assets/`) into `dist/`. Everything is served with `must-revalidate`, so after a deploy every player gets the same version. Players on different protocol versions can't join each other's rooms.
 
-## Relay (for friends who can't connect)
+## Server: relay + accounts
 
-Some networks block direct browser-to-browser links: mobile data, CGNAT and strict routers. Players on those networks time out when joining. The relay in `relay/` fixes that. It is a Cloudflare Worker with one Durable Object per room, and it only forwards messages; the host's browser is still the game server.
+`relay/` is a small Cloudflare Worker deployed at `hometurf-relay.hometurf-relay.workers.dev`. It does two jobs:
+
+- **Accounts** (`relay/accounts.js`): one Durable Object with SQLite storage holds users, sessions, profiles and saved tracks.
+- **Relay** (`relay/worker.js`): some networks block direct browser-to-browser links (mobile data, CGNAT and strict routers), and players on those networks time out when joining. The relay forwards their messages, with one Durable Object per room. The host's browser is still the game server.
 
 - **Hosts** register with PeerJS and the relay at once.
 - **Guests** try a direct link first. If it isn't open within 3 s or fails, the relay joins the race and the first link to open wins. Settings > Connection > **Always relay** skips the direct attempt.
@@ -84,6 +87,14 @@ Your Netlify team protects new sites by default. This site is set like RICOCHAOS
   - **Automatic** (default): a sporty box that drops a gear for corners and holds it through the bend.
   - **Manual** (Settings): X / Z or flick the right stick. Shifting inside the green band of the rev counter is a **perfect shift**: a near-seamless change plus +8% power for 0.8 s.
   - **HUD:** a rev counter with gear, revs, the redline and the perfect-shift window.
+- **Pit-stop races** (`js/sim/pit.js`). A race setting on loops of 1.5 km or more.
+  - **Tyres:** they wear with distance, sliding, drifting and hard braking, and lose grip past 60% (the tyre gauge shows it). Normal races have no wear.
+  - **Pit lane:** planned beside a calm straight (usually the start straight) from the track geometry, validated so it never clashes with other parts of the loop or folds on a bend. The host ships the plan with the track so every player drives the same lane.
+  - **The stop:** a 120 km/h limiter, three painted boxes and garages. Stop in a box and a quick-time event changes the four wheels. Bots pit when their tyres are gone and there's racing left.
+  - **With pit stops off**, the lane is barriered off.
+- **Accounts** (`js/account.js`, `relay/accounts.js`). Username and password, no email. Progress, garage, the settings that follow the player, and saved tracks sync to the server. Device-only settings like volume and graphics stay local.
+  - **Password handling:** the password is stretched with PBKDF2 in the browser, and the server only stores a salted hash of that key.
+  - **Sign-out** brings back the device's own guest profile.
 - **Controls.** Keyboard with smoothed steering, or a gamepad with analog throttle and steering. The optional steering assist keeps you off the walls.
 - **Real recorded audio** (CC0, see `assets/audio/CREDITS.md`).
   - **Engines:** each car crossfades a real idle recording into a real driving loop. V8 cars use a Maserati V8. The pitch follows the car's real revs and gear, with shifts, the rev limiter, lift-off backfires and turbo blow-off. A sub-octave layer and a gentle EQ keep high revs full rather than thin.
@@ -119,10 +130,12 @@ js/sim/          pure simulation, shared by game, test bench and Node sim
   track.js       route -> smooth centerline, validation, sectors, features
   physics.js     arcade car physics     ai.js       bots
   drivetrain.js  engines, gears, perfect shifts, launch calibration
+  pit.js         pit lane planning + validation, pit walls, tyre wear
   items.js       projectiles/hazards    parts.js    builds, mass coupling, upgrades
 js/game.js       client game: owned cars, remote interpolation, items, timing
 js/server.js     host room authority: lobby, sessions, results, points
 js/net.js        host/client links: PeerJS (direct) + WebSocket relay fallback
+js/account.js    accounts: sign up / in, profile + track sync
 js/version.js    version + changelog (menu badge, CHANGELOG.md, version.json)
 js/vtiles.js     vector-tile decoder, street graph, scenery
 js/osm.js        Overpass, Nominatim, A* routing
@@ -130,5 +143,5 @@ js/render/       three.js world, procedural cars, effects, cameras
 js/ui/           menus, lobby, garage, Track Studio, HUD
 js/audio.js      mixer, engine voices, effects, music
 js/engineWorklet.js   combustion-pulse engine synth (AudioWorklet)
-relay/           Cloudflare Worker relay (worker.js, wrangler.toml)
+relay/           Cloudflare Worker: room relay (worker.js) + accounts (accounts.js)
 ```

@@ -5,7 +5,7 @@
 export const NET = {
   PEER_PREFIX: 'hometurf-v1-',
   PUBLIC_SLOTS: 8,
-  PROTO: 3,           // bump on any wire-format change: mismatched tabs get told to refresh
+  PROTO: 4,           // bump on any wire-format change: mismatched tabs get told to refresh
   SNAP_HZ: 20,        // host -> everyone
   STATE_HZ: 30,       // owner -> host
   MAX_CARS: 12,
@@ -165,6 +165,8 @@ export const DEFAULT_SETTINGS = {
   collisions: true,
   catchup: true,
   upgrades: true,         // false = everyone's parts count as level 1
+  pitstops: false,        // pit-stop races: tyres wear and the pit lane opens (tracks long enough to have one)
+  tyreWear: 'normal',     // 'normal' | 'high', pit-stop races only
   public: false,
 };
 

@@ -42,6 +42,8 @@
     </div>
     <div class="hud-bc">
       <div id="h-tach"><canvas id="h-tach-c"></canvas><div id="h-gear">1</div><div id="h-speed"></div><div id="h-rpm"></div></div>
+      <div id="h-tyres" class="hidden"><div class="ty-car"><i></i><i></i><i></i><i></i></div><b>100%</b><small>TYRES</small></div>
+      <div id="h-pit" class="hidden"></div>
       <div id="h-charge"><div></div></div>
     </div>
     <div class="hud-br"><canvas id="h-map" width="220" height="220"></canvas></div>
@@ -49,6 +51,12 @@
     <div id="h-center"><div id="h-count"></div><div id="h-banner"></div><div id="h-wrong">WRONG WAY</div></div>
     <div id="h-spec"></div>
     <div id="h-pops"></div>
+    <div id="h-qte" class="hidden">
+      <h4>PIT STOP</h4>
+      <div class="q-wheels"><span>FL</span><span>FR</span><span>RL</span><span>RR</span></div>
+      <div class="q-bar"><i class="q-zone"></i><i class="q-mark"></i></div>
+      <small id="q-hint">Press SPACE in the green</small>
+    </div>
     <div id="h-tab" class="hidden"></div>
   </div>
   <form id="chatbox" class="hidden" autocomplete="off"><input id="chat-in" maxlength="160" placeholder="Say something... (Enter to send, Esc to cancel)"></form>
@@ -83,6 +91,7 @@
       <div class="m-update hidden" id="m-update"></div>
     </div>
     <div class="profile-card" id="m-profile"></div>
+    <button class="m-account" id="m-account" data-act="account"></button>
   </section>
 
   <section id="s-join" class="screen">
@@ -223,6 +232,13 @@
       <header class="phead"><button class="back" data-act="controls-back">&larr; Back</button><h2>Controls</h2></header>
       <table class="keys" id="keys"></table>
       <div class="tips" id="tips"></div>
+    </div>
+  </section>
+
+  <section id="s-account" class="screen">
+    <div class="panel narrow">
+      <header class="phead"><button class="back" data-act="account-back">&larr; Back</button><h2>Account</h2></header>
+      <div id="acct-body"></div>
     </div>
   </section>
 

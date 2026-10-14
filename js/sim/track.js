@@ -6,6 +6,7 @@
 // measured along the LEFT normal n = (tz, -tx) of the driving direction.
 import { TRACK_LIMITS } from './config.js';
 import { clamp, mulberry32, hashString, wrapAngle } from './util.js';
+import { planPit, PIT } from './pit.js';
 
 export const SPACING = 2;      // runtime sample spacing (m)
 const STORE_SPACING = 3;       // spacing of the stored / transmitted centerline
@@ -265,6 +266,13 @@ export class Track {
     this._tmp = {};
   }
 
+  // Pit lane (sim/pit.js): the host's plan travels with the track; otherwise it's
+  // planned here on first use (the Track Studio builds many throwaway tracks).
+  get pit() {
+    if (this._pit === undefined) this._pit = this.data.pit !== undefined ? this.data.pit : planPit(this);
+    return this._pit;
+  }
+
   wrapI(i) { const n = this.n; return ((i % n) + n) % n; }
   wrapS(s) { const L = this.L; return ((s % L) + L) % L; }
 
@@ -403,6 +411,7 @@ export function analyzeTrack(track) {
   for (const p of cluster(overlaps, 40)) add('error', 'overlap', 'Track runs on top of itself here (same street twice, or two lanes of a dual carriageway).', p[0], p[1]);
   const crossings = Math.round(cluster(crossPts, 30).length / 2);
   if (crossings) add('info', 'cross', `${crossings} crossing${crossings > 1 ? 's' : ''} - figure-8 action, watch for side impacts!`);
+  if (L >= PIT.minTrack) add('info', 'pit', track.pit ? 'Pit lane on the main straight - pit-stop races available.' : 'No calm straight with room beside it for a pit lane - no pit-stop races here.');
   return { ok: !issues.some(i => i.level === 'error'), length: L, issues, crossings };
 }
 

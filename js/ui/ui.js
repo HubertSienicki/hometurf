@@ -32,6 +32,7 @@ export class UI {
     if (id === 's-menu') this.renderMenu();
     if (id === 's-controls') this.renderControls();
     if (id === 's-settings') this.renderSettingsForm();
+    if (id === 's-account') this.renderAccount();
     if (id === 's-lobby' && this.room) this.renderLobby(this.room, this.app.game);
   }
   back(fallback = 's-menu') {
@@ -124,8 +125,9 @@ export class UI {
         this.show(a === 'settings' ? 's-settings' : 's-controls', !this.returnToPause);
         break;
       case 'changelog': this.openChangelog(); break;
+      case 'account': this.acctTab = this.acctTab || 'login'; this.show('s-account', true); break;
       case 'reload': location.reload(); break;
-      case 'settings-back': case 'controls-back': case 'tracks-back': case 'studio-back': case 'changelog-back': this.back(); break;
+      case 'settings-back': case 'controls-back': case 'tracks-back': case 'studio-back': case 'changelog-back': case 'account-back': this.back(); break;
       case 'menu': this.show('s-menu'); this.stack = []; break;
       case 'leave': this.confirmLeave(); break;
       case 'copy': this.copyInvite(); break;
@@ -164,9 +166,68 @@ export class UI {
     $('m-profile').onclick = () => this.app.openGarage();
     $('m-ver').textContent = `v${VERSION}${BUILD.commit === 'dev' ? ' (dev)' : ` · ${BUILD.commit}`}`;
     $('m-changes').classList.toggle('dot', p.d.seenVersion !== VERSION);
+    const acc = this.app.account;
+    $('m-account').innerHTML = acc?.signedIn
+      ? `<span class="ic">${acc.status === 'error' ? '!' : acc.status === 'syncing' ? '&#8635;' : '&#10003;'}</span><span><b>${escapeHtml(acc.user)}</b><small>${acc.status === 'error' ? 'Not synced - tap to retry' : acc.status === 'syncing' ? 'Syncing...' : 'Progress saved to your account'}</small></span>`
+      : `<span class="ic">+</span><span><b>${acc?.status === 'expired' ? 'Sign in again' : 'Create an account'}</b><small>${acc?.status === 'expired' ? 'Your session expired' : 'Save your progress and tracks'}</small></span>`;
     const up = this.app.update;
     $('m-update').classList.toggle('hidden', !up);
     if (up) $('m-update').innerHTML = `<span><b>v${escapeHtml(up.version)}</b> is out${up.version === VERSION ? ' (fixes)' : ''} - reload to update.</span><button class="btn primary small" data-act="reload">Reload</button>`;
+  }
+
+  // ------------------------------------------------------------ account
+  renderAccount() {
+    const acc = this.app.account, body = $('acct-body');
+    if (!acc) return;
+    if (acc.signedIn) {
+      const when = acc.lastSync ? new Date(acc.lastSync).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'not yet';
+      body.innerHTML = `
+        <p>Signed in as <b>${escapeHtml(acc.user)}</b>. Your level, credits, garage, settings and saved tracks are stored in your account, so they follow you to any device.</p>
+        <p class="muted small">${acc.status === 'syncing' ? 'Syncing...' : acc.status === 'error' ? 'The last save failed - it will retry.' : `Last synced: ${when}`}</p>
+        <div class="row gap wrap" style="margin-top:14px">
+          <button class="btn primary" id="acct-sync">Sync now</button>
+          <button class="btn" id="acct-out">Sign out</button>
+          <span class="grow"></span>
+          <button class="btn danger small" id="acct-del">Delete account</button>
+        </div>`;
+      $('acct-sync').onclick = () => this.acctRun(() => acc.sync(), 'Synced.');
+      $('acct-out').onclick = () => this.acctRun(() => acc.logout(), 'Signed out. This device is back to its own guest profile.');
+      $('acct-del').onclick = async () => {
+        const ok = await this.modal({ title: 'Delete your account?', body: `<p>This permanently deletes <b>${escapeHtml(acc.user)}</b>, its progress and its saved tracks from the server. Tracks on this device stay.</p><input id="acct-delpass" type="password" placeholder="Your password" autocomplete="current-password" style="width:100%">`, buttons: [{ label: 'Keep it', value: false }, { label: 'Delete forever', value: true, cls: 'danger' }] });
+        const pass = $('acct-delpass')?.value || '';
+        if (ok) this.acctRun(() => acc.deleteAccount(pass), 'Account deleted.');
+      };
+      return;
+    }
+    const create = this.acctTab === 'create';
+    body.innerHTML = `
+      ${acc.status === 'expired' ? '<p class="err">Your session expired - sign in again.</p>' : ''}
+      <div class="seg" style="margin-bottom:14px"><button data-tab="login" class="${create ? '' : 'on'}">Sign in</button><button data-tab="create" class="${create ? 'on' : ''}">Create account</button></div>
+      <form id="acct-form" class="form" autocomplete="on">
+        <label>Username</label><input id="acct-user" maxlength="20" autocomplete="username" spellcheck="false" value="${escapeHtml(acc.user || '')}">
+        <label>Password</label><input id="acct-pass" type="password" maxlength="200" autocomplete="${create ? 'new-password' : 'current-password'}">
+        ${create ? '<label>Repeat password</label><input id="acct-pass2" type="password" maxlength="200" autocomplete="new-password">' : ''}
+        <button class="btn primary full" id="acct-go">${create ? 'Create account' : 'Sign in'}</button>
+      </form>
+      <p id="acct-err" class="err"></p>
+      <p class="muted small">${create
+        ? 'Your current progress, garage and tracks move into the new account. No email needed - which also means there is no password reset, so keep your password safe.'
+        : 'Signing in loads your account progress on this device. This device keeps its own progress for when you sign out.'}</p>`;
+    body.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => { this.acctTab = b.dataset.tab; this.renderAccount(); }));
+    $('acct-form').addEventListener('submit', e => {
+      e.preventDefault();
+      const user = $('acct-user').value.trim(), pass = $('acct-pass').value;
+      if (create && pass !== $('acct-pass2').value) { $('acct-err').textContent = 'The passwords do not match.'; return; }
+      this.acctRun(() => (create ? acc.signup(user, pass) : acc.login(user, pass)), create ? `Welcome, ${user}! Your progress is saved to your account.` : `Signed in as ${user}.`);
+    });
+  }
+
+  async acctRun(fn, okMsg) {
+    if ($('acct-err')) $('acct-err').textContent = '';
+    this.loading('Talking to the server...');
+    try { await fn(); this.toast(okMsg, 'good'); }
+    catch (e) { if ($('acct-err')) $('acct-err').textContent = e.message; this.toast(e.message, 'err'); }
+    finally { this.loading(null); if (this.current === 's-account') this.renderAccount(); }
   }
 
   openChangelog() {
@@ -273,6 +334,8 @@ export class UI {
       ['Bots', step('bots', 0, NET.MAX_CARS - 1)], ['Bot skill', seg('botLevel', BOT_LEVELS.map((b, i) => [i, b.name]))],
       ['Time of day', seg('tod', [['day', 'Day'], ['sunset', 'Sunset'], ['night', 'Night']])],
       ['Car contact', onoff('collisions')], ['Catch-up help', onoff('catchup')],
+      ['Pit stops <span class="small dim">(tyres wear, change them in the pit lane)</span>', room.track?.pit ? onoff('pitstops') : '<span class="muted small">Not on this loop - it is too short for a pit lane</span>'],
+      ...(s.pitstops && room.track?.pit ? [['Tyre wear', seg('tyreWear', [['normal', 'Normal'], ['high', 'High']])]] : []),
       ['Part upgrades', seg('upgrades', [[true, 'Count'], [false, 'Equalized']])],
       ...(this.app.net ? [['Public room', onoff('public')]] : []),
     ];
@@ -450,6 +513,8 @@ export class UI {
     $('keys').innerHTML = `<tr><th>Action</th><th>Keyboard</th><th>Gamepad</th></tr>` + KEY_HELP.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('');
     $('tips').innerHTML = [
       '<div><b>Drift for boosts.</b> Hold drift while turning: sparks go blue, orange, then purple. Let go for a mini-turbo.</div>',
+      '<div><b>Gears.</b> Automatic by default. Pick Manual in Settings and shift with X / Z (or flick the right stick): change up in the green band for a perfect shift.</div>',
+      '<div><b>Pit-stop races.</b> Tyres wear and lose grip (watch the tyre gauge). Steer into the pit lane on the main straight, stop in a yellow box and hit SPACE in the green as each wheel is changed.</div>',
       '<div><b>Rocket start.</b> Press accelerate just as the last red light comes on. Too early and you bog down.</div>',
       '<div><b>Ramps:</b> tap drift in the air for a trick - land it for a boost.</div>',
       '<div><b>Slipstream:</b> sit right behind another car for a free boost.</div>',

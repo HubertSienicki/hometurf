@@ -20,6 +20,8 @@ const RELAY = (() => {
   return u.replace(/\/+$/, '');
 })();
 export const relayAvailable = () => !!RELAY;
+// HTTP base of the HOME TURF server (accounts live there too).
+export const apiBase = () => RELAY.replace(/^ws/, 'http');
 const RELAY_HEDGE_MS = 3000;   // direct link not open by then? start the relay too
 const relayUrl = (code, q) => `${RELAY.replace(/^http/, 'ws')}/room/${PEER_PREFIX}${code}${q}`;
 const relayInfoUrl = code => `${RELAY.replace(/^ws/, 'http')}/room/${PEER_PREFIX}${code}/info`;

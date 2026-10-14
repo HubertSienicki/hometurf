@@ -11,28 +11,67 @@ const DEFAULT_PREFS = { volume: 0.8, sfx: 0.8, music: 0.45, quality: 'high', ass
 export const xpFor = L => 100 * (L - 1) * (L - 1) + 200 * (L - 1);
 export function levelFromXp(xp) { let L = 1; while (xpFor(L + 1) <= xp) L++; return L; }
 
+// Settings that belong to this device, not the player: never synced to an account.
+const DEVICE_PREFS = ['volume', 'sfx', 'music', 'quality', 'showFps', 'net'];
+
+function normalize(d) {
+  return {
+    name: typeof d.name === 'string' && d.name.trim() ? d.name.slice(0, 18) : `Driver${Math.floor(100 + Math.random() * 900)}`,
+    car: CAR_IDS.includes(d.car) ? d.car : 'comet',
+    color: PAINT.includes(d.color) ? d.color : PAINT[Math.floor(Math.random() * 6)],
+    builds: d.builds && typeof d.builds === 'object' ? d.builds : {},
+    xp: Number(d.xp) || 0,
+    credits: Number.isFinite(d.credits) ? d.credits : 600,
+    owned: d.owned && typeof d.owned === 'object' ? d.owned : {},
+    stats: { races: 0, wins: 0, podiums: 0, hits: 0, bestLaps: {}, ...(d.stats || {}) },
+    settings: { ...DEFAULT_PREFS, ...(d.settings || {}) },
+    host: { ...DEFAULT_SETTINGS, ...(d.host || {}) },
+    token: d.token || Math.random().toString(36).slice(2),
+    seenUnlocks: d.seenUnlocks || 1,
+    seenVersion: typeof d.seenVersion === 'string' ? d.seenVersion : '',
+    deletedTracks: Array.isArray(d.deletedTracks) ? d.deletedTracks.filter(x => typeof x === 'string').slice(-300) : [],
+    updated: Number(d.updated) || 0,      // last real change (ms): the newer copy wins when syncing
+  };
+}
+
 export class Profile {
   constructor() {
     let d = {};
     try { d = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch { d = {}; }
-    this.d = {
-      name: typeof d.name === 'string' && d.name.trim() ? d.name.slice(0, 18) : `Driver${Math.floor(100 + Math.random() * 900)}`,
-      car: CAR_IDS.includes(d.car) ? d.car : 'comet',
-      color: PAINT.includes(d.color) ? d.color : PAINT[Math.floor(Math.random() * 6)],
-      builds: d.builds && typeof d.builds === 'object' ? d.builds : {},
-      xp: Number(d.xp) || 0,
-      credits: Number.isFinite(d.credits) ? d.credits : 600,
-      owned: d.owned && typeof d.owned === 'object' ? d.owned : {},
-      stats: { races: 0, wins: 0, podiums: 0, hits: 0, bestLaps: {}, ...(d.stats || {}) },
-      settings: { ...DEFAULT_PREFS, ...(d.settings || {}) },
-      host: { ...DEFAULT_SETTINGS, ...(d.host || {}) },
-      token: d.token || Math.random().toString(36).slice(2),
-      seenUnlocks: d.seenUnlocks || 1,
-      seenVersion: typeof d.seenVersion === 'string' ? d.seenVersion : '',
-    };
+    this.d = normalize(d);
+    this.sig = '';
+    this.onChange = null;     // set by the account to sync changes
     this.save();
   }
-  save() { try { localStorage.setItem(KEY, JSON.stringify(this.d)); } catch { /* storage full / private mode */ } }
+  save() {
+    const { updated, ...rest } = this.d;
+    const sig = JSON.stringify(rest);
+    const changed = !!this.sig && sig !== this.sig;
+    if (changed) this.d.updated = Date.now();
+    this.sig = sig;
+    try { localStorage.setItem(KEY, JSON.stringify(this.d)); } catch { /* storage full / private mode */ }
+    if (changed) this.onChange?.();
+  }
+  // What an account stores: everything except this device's own settings.
+  exportData() {
+    const d = JSON.parse(JSON.stringify(this.d));
+    for (const k of DEVICE_PREFS) delete d.settings[k];
+    return d;
+  }
+  // Take an account's copy, keeping this device's settings. The settings object
+  // is updated in place: audio and the renderer hold on to it.
+  importData(raw, updated) {
+    const mine = {};
+    for (const k of DEVICE_PREFS) mine[k] = this.d.settings[k];
+    const n = normalize({ ...raw, settings: { ...(raw?.settings || {}), ...mine } });
+    n.updated = Number(updated) || n.updated;
+    const live = this.d.settings;
+    for (const k of Object.keys(live)) delete live[k];
+    n.settings = Object.assign(live, n.settings);
+    this.d = n;
+    this.sig = '';
+    this.save();
+  }
 
   get name() { return this.d.name; }
   set name(v) { this.d.name = String(v || '').replace(/[<>]/g, '').trim().slice(0, 18) || this.d.name; this.save(); }

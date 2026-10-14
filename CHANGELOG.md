@@ -2,6 +2,15 @@
 
 Generated from `js/version.js` by `npm run build`.
 
+## 1.4.0 - Accounts and pit stops (2026-10-14)
+
+- Accounts: create one with a username and password (no email) and your level, credits, garage, settings and saved tracks are stored online. Sign in on any device to pick up where you left off.
+- Pit-stop races (race setting, on loops of 1.5 km or more): tyres wear and lose grip, and there is a real pit lane beside the main straight with a 120 km/h limiter, painted boxes and garages.
+- Stop in a box and the crew changes all four tyres: hit SPACE (or RB) in the green for each wheel. Good timing means a quick stop. Bots pit too when their tyres are gone.
+- Tyre gauge on the HUD in pit-stop races. Normal races have no tyre wear and the pit lane stays closed.
+- Fixed: the lobby view flickered (roads, side streets and the ground fighting each other).
+- Buildings are taller, houses have pitched roofs and tall blocks a parapet, so the city no longer looks cut off.
+
 ## 1.3.1 - Relay switched on (2026-10-14)
 
 - The relay server is live, so friends whose network blocks direct connections can join rooms.

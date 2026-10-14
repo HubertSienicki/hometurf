@@ -1,0 +1,12 @@
+{
+  "name": "hometurf-relay",
+  "private": true,
+  "description": "WebSocket relay for HOME TURF rooms, for players whose network blocks WebRTC",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

@@ -11,6 +11,7 @@ import { Game } from './game.js';
 import { HostServer } from './server.js';
 import { HostNet, ClientNet, randomCode, normalizeCode, probePublicRooms, claimPublicSlot } from './net.js';
 import { NET } from './sim/config.js';
+import { VERSION, BUILD } from './version.js';
 import { PRESETS, buildPreset } from './sim/presets.js';
 
 const $ = id => document.getElementById(id);
@@ -128,6 +129,7 @@ app.host = async ({ pub }) => {
   server.setTrack(await defaultTrack());
   ui.enterLobby();
   if (net) ui.toast(`Room ${code.toUpperCase()} is open - share the code!`, 'good');
+  if (net && !net.peer) ui.toast('Direct connections are blocked here - friends will join through the relay.', '');
 };
 
 app.join = async raw => {
@@ -138,7 +140,7 @@ app.join = async raw => {
   ui.loading('Joining room...');
   const net = new ClientNet();
   try {
-    const welcome = await net.connect(code, { t: 'hello', proto: NET.PROTO, ...profile.hello() });
+    const welcome = await net.connect(code, { t: 'hello', proto: NET.PROTO, ver: VERSION, ...profile.hello() }, { mode: profile.settings.net });
     stopAttract();
     const game = new Game({ view, hud, audio, input, profile, ui: makeBridge(), send: (m, rel) => net.send(m, rel), myId: welcome.id, isHost: false });
     net.onMessage = m => game.onMessage(m);
@@ -148,6 +150,7 @@ app.join = async raw => {
     ui.enterLobby();
     game.onMessage(welcome.room);
     history.replaceState(null, '', location.pathname);
+    if (net.via === 'relay') ui.toast('Connected through the relay server (a direct link was blocked).', '');
   } catch (err) {
     net.destroy();
     $('join-err').textContent = err.message;
@@ -306,6 +309,28 @@ if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) {
     es.addEventListener('css', () => { for (const l of document.querySelectorAll('link[rel=stylesheet]')) if (l.href.includes('style.css')) l.href = l.href.replace(/(\?.*)?$/, `?v=${Date.now()}`); });
   } catch { /* no dev server */ }
 }
+
+// New deploys: version.json is written by every build. Poll it (and on tab
+// focus) and offer a reload in the menu, never mid-race.
+if (BUILD.commit !== 'dev') {
+  let lastCheck = -Infinity;
+  const check = async () => {
+    if (app.update || performance.now() - lastCheck < 60e3) return;
+    lastCheck = performance.now();
+    try {
+      const v = await (await fetch('version.json', { cache: 'no-store' })).json();
+      if (!v?.date || v.date === BUILD.date) return;
+      app.update = v;
+      if (!app.inSession()) ui.toast(`HOME TURF v${v.version} is out - reload from the main menu to update.`, 'good');
+      if (ui.current === 's-menu') ui.renderMenu();
+    } catch { /* offline */ }
+  };
+  setInterval(check, 5 * 60e3);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+  setTimeout(check, 20e3);
+}
+// First start after an update: point at what changed.
+if (profile.d.seenVersion && profile.d.seenVersion !== VERSION) setTimeout(() => ui.toast(`Updated to v${VERSION} - see the Changelog in the main menu.`, 'good'), 1500);
 
 ui.show('s-title');
 startAttract();

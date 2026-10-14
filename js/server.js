@@ -3,6 +3,7 @@
 // Owns: players, settings, bots, the track, sessions (practice / qualifying /
 // race), sector timing, results and championship points. Car movement is
 // owned by each player's browser; the server relays snapshots and events.
+import { VERSION } from './version.js';
 import { NET, DEFAULT_SETTINGS, BOT_NAMES, CAR_IDS, PAINT, POINTS, BOT_LEVELS } from './sim/config.js';
 import { PARTS, SLOTS, LIVERIES, sanitizeBuild } from './sim/parts.js';
 
@@ -62,7 +63,7 @@ export class HostServer {
     const host = this.players.get(HOST);
     return {
       proto: NET.PROTO, name: `${host ? host.name : 'Host'}'s room`, players: ps.filter(p => !p.bot).length, bots: ps.filter(p => p.bot).length,
-      max: NET.MAX_CARS, track: this.trackMeta?.name || '-', phase: this.phase, mode: this.settings.mode,
+      max: NET.MAX_CARS, track: this.trackMeta?.name || '-', phase: this.phase, mode: this.settings.mode, ver: VERSION,
     };
   }
 
@@ -88,7 +89,7 @@ export class HostServer {
 
   join(h) {
     if (h.t !== 'hello') return { err: 'Bad handshake.' };
-    if (h.proto !== NET.PROTO) return { err: 'Version mismatch - refresh the page (Ctrl+F5) on both ends.' };
+    if (h.proto !== NET.PROTO) return { err: `Version mismatch: the host has v${VERSION}, you have ${h.ver ? 'v' + String(h.ver).slice(0, 12) : 'an older version'}. Refresh the page (Ctrl+F5) on both ends.` };
     const humans = [...this.players.values()].filter(p => !p.bot).length;
     if (humans >= NET.MAX_CARS) return { err: 'Room is full.' };
     // make room by dropping a bot if needed

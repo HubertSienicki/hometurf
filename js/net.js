@@ -1,9 +1,29 @@
-// P2P networking over WebRTC (PeerJS). The host's browser is the server.
-// Signaling uses the free PeerJS cloud broker; no backend of our own is needed.
+// Networking. The host's browser is the server, reached two ways:
+//  - direct WebRTC (PeerJS), signalled through the free PeerJS cloud broker;
+//  - a WebSocket relay (relay/worker.js on Cloudflare) for players whose network
+//    blocks WebRTC (mobile data, CGNAT, strict routers). It only forwards frames.
+// A host listens on both. A guest tries direct first and races the relay in if
+// that is slow or fails (or uses the relay only, from Settings).
 // Public rooms live in well-known "slot" ids so players can find each other
 // without a lobby server: Quick Play / Server Browser just probe those slots.
 import { NET } from './sim/config.js';
 const { PEER_PREFIX, PUBLIC_SLOTS } = NET;
+
+// Relay address: NET.RELAY in production; on localhost ?relay=ws://localhost:8787
+// points at `npx wrangler dev` for testing.
+const RELAY = (() => {
+  let u = NET.RELAY || '';
+  try {
+    const q = new URLSearchParams(location.search).get('relay');
+    if (q && /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) u = q;
+  } catch { /* no location (headless) */ }
+  return u.replace(/\/+$/, '');
+})();
+export const relayAvailable = () => !!RELAY;
+const RELAY_HEDGE_MS = 3000;   // direct link not open by then? start the relay too
+const relayUrl = (code, q) => `${RELAY.replace(/^http/, 'ws')}/room/${PEER_PREFIX}${code}${q}`;
+const relayInfoUrl = code => `${RELAY.replace(/^ws/, 'http')}/room/${PEER_PREFIX}${code}/info`;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 export const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -115,11 +135,221 @@ export class Unpacker {
   }
 }
 const sendPacked = (ch, m) => { for (const part of pack(m)) ch.send(part); };
+// Relay links carry whole messages (up to 256 KB), so they skip the splitting.
+const sendOn = (ch, m) => ch.relay ? ch.send(m) : sendPacked(ch, m);
+
+// ---------------------------------------------------------------- relay links
+// Tiny event emitter so relay links look like PeerJS DataConnections.
+class Link {
+  constructor() { this.h = {}; this.open = true; this.relay = true; this.metadata = { k: 'r' }; }
+  on(e, f) { (this.h[e] ||= []).push(f); return this; }
+  off(e, f) { const a = this.h[e]; const i = a ? a.indexOf(f) : -1; if (i >= 0) a.splice(i, 1); return this; }
+  emit(e, v) { for (const f of [...(this.h[e] || [])]) { try { f(v); } catch (err) { console.error(err); } } }
+}
+
+// Host side: one guest behind the relay.
+class RelayGuest extends Link {
+  constructor(host, id) { super(); this.host = host; this.gid = id; this.peer = `relay:${id}`; }
+  send(m) { if (this.open) this.host.out(`>${this.gid}|${JSON.stringify(m)}`); }
+  close() {
+    if (!this.open) return;
+    this.open = false;
+    this.host.guests.delete(this.gid);
+    this.host.out(`#${this.gid}`);
+    this.emit('close');
+  }
+  gone() { if (!this.open) return; this.open = false; this.host.guests.delete(this.gid); this.emit('close'); }
+}
+
+// Host side: the host's own socket to its relay room. Guests show up as
+// RelayGuest links handed to HostNet.handle(), exactly like PeerJS connections.
+class RelayHost {
+  constructor(code, net) {
+    this.code = code; this.net = net;
+    this.guests = new Map();
+    this.ws = null; this.dead = false; this.infoS = ''; this.timer = 0;
+    // The same key lets a reloaded host tab take its room back at once.
+    const k = `hometurf-relay-key-${code}`;
+    try { this.key = sessionStorage.getItem(k); } catch { /* storage blocked */ }
+    if (!this.key) {
+      this.key = Math.random().toString(36).slice(2, 12) + Math.random().toString(36).slice(2, 8);
+      try { sessionStorage.setItem(k, this.key); } catch { /* ignore */ }
+    }
+  }
+
+  open(timeout = 8000) {
+    return new Promise((resolve, reject) => {
+      let ws;
+      try { ws = new WebSocket(relayUrl(this.code, `?role=host&key=${this.key}`)); } catch (err) { reject(Object.assign(err, { type: 'relay' })); return; }
+      const fail = (msg, type = 'relay') => {
+        clearTimeout(t); ws.onmessage = ws.onclose = ws.onerror = null;
+        try { ws.close(); } catch { /* ignore */ }
+        reject(Object.assign(new Error(msg), { type }));
+      };
+      const t = setTimeout(() => fail('The relay did not answer.'), timeout);
+      ws.onerror = ws.onclose = () => fail('Could not reach the relay.');
+      ws.onmessage = e => {
+        if (e.data === '!taken') return fail('That room code is in use.', 'unavailable-id');
+        if (e.data !== '!ok') return;
+        clearTimeout(t);
+        if (this.dead) { try { ws.close(1000); } catch { /* ignore */ } reject(Object.assign(new Error('closed'), { type: 'relay' })); return; }
+        this.attach(ws);
+        resolve(this);
+      };
+    });
+  }
+
+  attach(ws) {
+    this.ws = ws;
+    ws.onmessage = e => this.route(e.data);
+    ws.onerror = null;
+    ws.onclose = () => {
+      if (this.ws !== ws) return;
+      this.ws = null;
+      // The relay drops every guest when the host's socket goes; tell the game, then reconnect.
+      for (const g of [...this.guests.values()]) g.gone();
+      if (!this.dead) this.reconnect();
+    };
+    clearInterval(this.timer);
+    this.infoS = '';
+    let quiet = 0;
+    this.timer = setInterval(() => {
+      // Room info for the server browser, sent only when it changes.
+      try {
+        const s = JSON.stringify(this.net.onInfo ? this.net.onInfo() : {});
+        if (s !== this.infoS && s.length < 1400) { this.infoS = s; this.out('@' + s); quiet = 0; }
+        else if (++quiet >= 10) { quiet = 0; this.out('.'); }   // keepalive; the relay answers it without waking up
+      } catch { /* room closing */ }
+    }, 3000);
+  }
+
+  async reconnect() {
+    for (let wait = 1000; !this.dead; wait = Math.min(wait * 2, 15000)) {
+      await sleep(wait);
+      if (this.dead) return;
+      try { await this.open(); return; } catch (err) {
+        if (err.type === 'unavailable-id') { console.warn('[relay] room code taken by another host'); return; }
+      }
+    }
+  }
+
+  route(d) {
+    if (typeof d !== 'string') return;
+    const c = d[0];
+    if (c === '+') {
+      const g = new RelayGuest(this, +d.slice(1));
+      this.guests.set(g.gid, g);
+      this.net.handle(g);
+      g.emit('open');
+    } else if (c === '-') {
+      this.guests.get(+d.slice(1))?.gone();
+    } else if (c >= '0' && c <= '9') {
+      const bar = d.indexOf('|');
+      const g = this.guests.get(+d.slice(0, bar));
+      if (!g) return;
+      let m; try { m = JSON.parse(d.slice(bar + 1)); } catch { return; }
+      g.emit('data', m);
+    }
+  }
+
+  out(s) { if (this.ws && this.ws.readyState === 1) { try { this.ws.send(s); } catch { /* closing */ } } }
+  multicast(ids, m) { if (ids.length) this.out(`>${ids.join(',')}|${JSON.stringify(m)}`); }
+
+  destroy() {
+    this.dead = true;
+    clearInterval(this.timer);
+    const ws = this.ws; this.ws = null;
+    for (const g of [...this.guests.values()]) g.gone();
+    try { ws && ws.close(1000); } catch { /* ignore */ }
+  }
+}
+
+// Guest side: a socket to the host's relay room.
+class RelayConn extends Link {
+  constructor(ws) {
+    super();
+    this.ws = ws; this.peer = 'relay';
+    ws.onmessage = e => {
+      const d = e.data;
+      if (typeof d !== 'string' || d[0] !== '{') return;   // control frames and keepalive echoes
+      let m; try { m = JSON.parse(d); } catch { return; }
+      this.emit('data', m);
+    };
+    ws.onerror = null;
+    ws.onclose = () => { clearInterval(this.ka); if (this.open) { this.open = false; this.emit('close'); } };
+    this.ka = setInterval(() => { if (ws.readyState === 1) ws.send('.'); }, 30000);
+  }
+  send(m) { if (this.open && this.ws.readyState === 1) this.ws.send(JSON.stringify(m)); }
+  close() {
+    clearInterval(this.ka);
+    if (!this.open) return;
+    this.open = false;
+    try { this.ws.close(1000); } catch { /* ignore */ }
+    this.emit('close');
+  }
+}
+
+function connectRelay(code, timeout = 8000) {
+  return new Promise((resolve, reject) => {
+    let ws;
+    try { ws = new WebSocket(relayUrl(code, '?role=guest')); } catch (err) { reject(Object.assign(err, { type: 'relay' })); return; }
+    const fail = (msg, type) => {
+      clearTimeout(t); ws.onmessage = ws.onclose = ws.onerror = null;
+      try { ws.close(); } catch { /* ignore */ }
+      reject(Object.assign(new Error(msg), { type }));
+    };
+    const t = setTimeout(() => fail('The relay did not answer.', 'timeout'), timeout);
+    ws.onerror = ws.onclose = () => fail('Could not reach the relay.', 'relay');
+    ws.onmessage = e => {
+      if (e.data === '!none') return fail('No such room.', 'peer-unavailable');
+      if (e.data === '!full') return fail('Room is full.', 'full');
+      if (e.data !== '!ok') return;
+      clearTimeout(t);
+      resolve(new RelayConn(ws));
+    };
+  });
+}
+
+// Open a guest's link to a room: direct first; the relay joins the race if the
+// direct link hasn't opened within RELAY_HEDGE_MS or fails. First to open wins.
+function openRoute(code, mode) {
+  const direct = !(mode === 'relay' && RELAY);
+  return new Promise((resolve, reject) => {
+    let done = false, live = 0, relayOn = false, timer = 0;
+    const errs = [];
+    const win = conn => {
+      if (done) { try { conn.close(); } catch { /* ignore */ } return; }
+      done = true; clearTimeout(timer); resolve(conn);
+    };
+    const lose = err => {
+      errs.push(err); live--;
+      if (done) return;
+      if (RELAY && !relayOn) { startRelay(); return; }
+      if (live > 0) return;
+      done = true; clearTimeout(timer);
+      if (errs.some(e => e.type === 'full')) reject(new Error('Room is full.'));
+      else if (errs.some(e => e.type === 'peer-unavailable')) reject(new Error(`Room "${code.toUpperCase()}" was not found.`));
+      else reject(new Error(errs.find(e => e.type !== 'peer-unavailable')?.message || 'Could not connect to the room.'));
+    };
+    const startRelay = () => {
+      if (relayOn || done) return;
+      relayOn = true; clearTimeout(timer); live++;
+      connectRelay(code).then(win, lose);
+    };
+    if (direct) {
+      live++;
+      getClientPeer()
+        .then(peer => connectTo(peer, PEER_PREFIX + code, { reliable: true, serialization: 'json', metadata: { k: 'r' } }))
+        .then(win, lose);
+      if (RELAY) timer = setTimeout(startRelay, RELAY_HEDGE_MS);
+    } else startRelay();
+  });
+}
 
 // ---------------------------------------------------------------- host
 export class HostNet {
   constructor() {
-    this.peer = null;
+    this.peer = null; this.relay = null;
     this.code = null;
     this.conns = new Map();   // playerId -> { r, u, peerId, seen }
     this.byPeer = new Map();  // remote peer id -> playerId
@@ -127,23 +357,36 @@ export class HostNet {
     this.hb = null;
   }
 
+  // Listens on PeerJS and the relay at once; either one alone is enough.
   async start(code, { retryFor = 0 } = {}) {
     const deadline = performance.now() + retryFor;
     for (;;) {
-      try {
-        this.peer = await openPeer(PEER_PREFIX + code);
-        break;
-      } catch (err) {
-        if (err.type === 'unavailable-id' && performance.now() < deadline) { await new Promise(r => setTimeout(r, 1200)); continue; }
-        throw err;
+      const relay = RELAY ? new RelayHost(code, this) : null;
+      const [p, r] = await Promise.allSettled([
+        openPeer(PEER_PREFIX + code),
+        relay ? relay.open() : Promise.reject(Object.assign(new Error('No relay configured.'), { type: 'relay' })),
+      ]);
+      const taken = [p, r].find(x => x.status === 'rejected' && x.reason?.type === 'unavailable-id');
+      if (taken || (p.status === 'rejected' && r.status === 'rejected')) {
+        if (p.status === 'fulfilled') { try { p.value.destroy(); } catch { /* ignore */ } }
+        relay?.destroy();
+        if (taken && performance.now() < deadline) { await sleep(1200); continue; }
+        throw taken ? taken.reason : p.reason;
       }
+      this.peer = p.status === 'fulfilled' ? p.value : null;
+      if (r.status === 'fulfilled') this.relay = relay; else relay?.destroy();
+      if (!this.peer) console.warn('[host] direct connections unavailable, relay only:', p.reason?.message);
+      break;
     }
     this.code = code;
-    this.peer.on('connection', c => this.handle(c));
-    this.peer.on('disconnected', () => {
-      setTimeout(() => { if (this.peer && !this.peer.destroyed && this.peer.disconnected) try { this.peer.reconnect(); } catch { /* ignore */ } }, 1000);
-    });
-    this.peer.on('error', err => console.warn('[host]', err.type, err.message));
+    const peer = this.peer;
+    if (peer) {
+      peer.on('connection', c => this.handle(c));
+      peer.on('disconnected', () => {
+        setTimeout(() => { if (this.peer === peer && !peer.destroyed && peer.disconnected) try { peer.reconnect(); } catch { /* ignore */ } }, 1000);
+      });
+      peer.on('error', err => console.warn('[host]', err.type, err.message));
+    }
     this.hb = setInterval(() => {
       const now = performance.now();
       for (const [pid, c] of this.conns) if (now - c.seen > 9000) this.drop(pid);
@@ -156,7 +399,7 @@ export class HostNet {
     const un = new Unpacker();
     conn.on('open', () => {
       if (meta.k === 'probe') {
-        sendPacked(conn, { t: 'info', ...(this.onInfo ? this.onInfo() : {}) });
+        sendOn(conn, { t: 'info', ...(this.onInfo ? this.onInfo() : {}) });
         setTimeout(() => { try { conn.close(); } catch { /* ignore */ } }, 1500);
       } else if (meta.k === 'u') {
         const pid = this.byPeer.get(conn.peer);
@@ -179,7 +422,7 @@ export class HostNet {
         if (old && old.r !== conn) { try { old.r.close(); } catch { /* ignore */ } }
         this.conns.set(res.id, { r: conn, u: null, peerId: conn.peer, seen: performance.now() });
         this.byPeer.set(conn.peer, res.id);
-        sendPacked(conn, res.welcome);
+        sendOn(conn, res.welcome);
         return;
       }
       if (pid != null) {
@@ -210,12 +453,19 @@ export class HostNet {
     const c = this.conns.get(pid);
     if (!c) return;
     const ch = !reliable && c.u && c.u.open ? c.u : c.r;
-    if (ch && ch.open) { try { sendPacked(ch, m); } catch { /* channel closing */ } }
+    if (ch && ch.open) { try { sendOn(ch, m); } catch { /* channel closing */ } }
   }
 
   broadcast(m, except = null, reliable = true) {
-    for (const pid of this.conns.keys()) if (pid !== except) this.send(pid, m, reliable);
+    const viaRelay = [];   // relayed guests share one frame; the relay fans it out
+    for (const [pid, c] of this.conns) {
+      if (pid === except) continue;
+      if (c.r.relay) { if (c.r.open) viaRelay.push(c.r.gid); } else this.send(pid, m, reliable);
+    }
+    this.relay?.multicast(viaRelay, m);
   }
+
+  get relayed() { let n = 0; for (const c of this.conns.values()) if (c.r.relay) n++; return n; }
 
   get playerCount() { return this.conns.size; }
 
@@ -227,7 +477,8 @@ export class HostNet {
     }
     this.conns.clear();
     try { this.peer && this.peer.destroy(); } catch { /* ignore */ }
-    this.peer = null;
+    this.relay?.destroy();
+    this.peer = null; this.relay = null;
   }
 }
 
@@ -240,17 +491,11 @@ export class ClientNet {
     this.code = null;
   }
 
-  async connect(code, hello) {
-    const peer = await getClientPeer();
+  // mode 'auto': direct first, relay as fallback; 'relay': relay only.
+  async connect(code, hello, { mode = 'auto' } = {}) {
     this.code = code;
-    const target = PEER_PREFIX + code;
-    let r;
-    try {
-      r = await connectTo(peer, target, { reliable: true, serialization: 'json', metadata: { k: 'r' } });
-    } catch (err) {
-      if (err.type === 'peer-unavailable') throw new Error(`Room "${code.toUpperCase()}" was not found.`);
-      throw new Error(err.message || 'Could not connect to the room.');
-    }
+    const r = await openRoute(code, mode);
+    this.via = r.relay ? 'relay' : 'direct';
     this.r = r;
     const un = new Unpacker();
     const welcome = await new Promise((resolve, reject) => {
@@ -262,19 +507,21 @@ export class ClientNet {
         else if (m.t === 'reject') { clearTimeout(t); r.off('data', onData); reject(new Error(m.err)); }
       };
       r.on('data', onData);
-      sendPacked(r, hello);
+      sendOn(r, hello);
     });
     this.lastRecv = performance.now();
     r.on('data', raw => { this.lastRecv = performance.now(); const m = un.take(raw); if (m) this.onMessage?.(m); });
     r.on('close', () => this.fail('closed'));
     r.on('error', () => this.fail('error'));
-    // second, unreliable channel for fast state updates
-    connectTo(peer, target, { reliable: false, serialization: 'json', metadata: { k: 'u' } }).then(u => {
-      if (this.closed) { u.close(); return; }
-      this.u = u;
-      const uu = new Unpacker();
-      u.on('data', raw => { this.lastRecv = performance.now(); const m = uu.take(raw); if (m) this.onMessage?.(m); });
-    }).catch(() => { /* reliable channel still works */ });
+    // second, unreliable channel for fast state updates (direct links only)
+    if (!r.relay) {
+      getClientPeer().then(peer => connectTo(peer, PEER_PREFIX + code, { reliable: false, serialization: 'json', metadata: { k: 'u' } })).then(u => {
+        if (this.closed) { u.close(); return; }
+        this.u = u;
+        const uu = new Unpacker();
+        u.on('data', raw => { this.lastRecv = performance.now(); const m = uu.take(raw); if (m) this.onMessage?.(m); });
+      }).catch(() => { /* reliable channel still works */ });
+    }
     this.hb = setInterval(() => { if (performance.now() - this.lastRecv > 6000) this.fail('timeout'); }, 1000);
     return welcome;
   }
@@ -290,7 +537,7 @@ export class ClientNet {
 
   send(m, reliable = true) {
     const ch = !reliable && this.u && this.u.open ? this.u : this.r;
-    if (ch && ch.open) { try { sendPacked(ch, m); } catch { /* closing */ } }
+    if (ch && ch.open) { try { sendOn(ch, m); } catch { /* closing */ } }
   }
 
   destroy() {
@@ -302,16 +549,44 @@ export class ClientNet {
 }
 
 // ---------------------------------------------------------------- discovery
-export async function probeRoom(code, timeout = 3500) {
-  const peer = await getClientPeer();
-  const target = PEER_PREFIX + code;
+// What the relay knows about a room: an info object, null (no such room) or
+// undefined (no relay, or unreachable).
+async function relayInfo(code, timeout = 3000) {
+  if (!RELAY) return undefined;
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), timeout);
   try {
-    const conn = await connectTo(peer, target, { reliable: true, serialization: 'json', metadata: { k: 'probe' } }, timeout);
+    const res = await fetch(relayInfoUrl(code), { signal: ctl.signal, cache: 'no-store' });
+    if (!res.ok) return undefined;
+    const j = await res.json();
+    return j.open ? { ...(j.info || {}), t: 'info', code } : null;
+  } catch { return undefined; } finally { clearTimeout(t); }
+}
+
+async function probeDirect(code, timeout) {
+  try {
+    const peer = await getClientPeer();
+    const conn = await connectTo(peer, PEER_PREFIX + code, { reliable: true, serialization: 'json', metadata: { k: 'probe' } }, timeout);
     return await new Promise(resolve => {
       const t = setTimeout(() => { try { conn.close(); } catch { /* ignore */ } resolve(null); }, timeout);
       conn.on('data', m => { if (m.t === 'info') { clearTimeout(t); try { conn.close(); } catch { /* ignore */ } resolve({ ...m, code }); } });
     });
   } catch { return null; }
+}
+
+// Ask the relay and the room itself at once; a full answer from either wins.
+export function probeRoom(code, timeout = 3500) {
+  return new Promise(resolve => {
+    let left = 2, partial = null;
+    const take = v => {
+      if (left <= 0) return;
+      if (v && v.proto != null) { left = 0; resolve(v); return; }
+      if (v) partial = v;
+      if (--left === 0) resolve(partial);
+    };
+    relayInfo(code).then(take, () => take(null));
+    probeDirect(code, timeout).then(take, () => take(null));
+  });
 }
 
 export async function probePublicRooms() {

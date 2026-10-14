@@ -73,8 +73,11 @@
         <div class="menu-row">
           <button class="sbtn" data-act="settings">Settings</button>
           <button class="sbtn" data-act="controls">Controls</button>
+          <button class="sbtn" data-act="changelog" id="m-changes">Changelog</button>
         </div>
       </nav>
+      <div class="m-ver" id="m-ver"></div>
+      <div class="m-update hidden" id="m-update"></div>
     </div>
     <div class="profile-card" id="m-profile"></div>
   </section>
@@ -217,6 +220,13 @@
       <header class="phead"><button class="back" data-act="controls-back">&larr; Back</button><h2>Controls</h2></header>
       <table class="keys" id="keys"></table>
       <div class="tips" id="tips"></div>
+    </div>
+  </section>
+
+  <section id="s-changelog" class="screen">
+    <div class="panel narrow">
+      <header class="phead"><button class="back" data-act="changelog-back">&larr; Back</button><h2>Changelog</h2><span class="muted small" id="cl-ver"></span></header>
+      <div id="cl-list" class="cl-list"></div>
     </div>
   </section>
 

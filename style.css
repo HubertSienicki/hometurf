@@ -88,6 +88,22 @@ h2 { font-family: var(--display); font-weight: 400; }
 .menu-row { display: flex; gap: 9px; max-width: 400px; margin-top: 4px; }
 .sbtn { flex: 1; border: 1px solid var(--line-2); background: rgba(20, 24, 40, 0.8); padding: 10px; border-radius: 10px; cursor: pointer; font-weight: 600; }
 .sbtn:hover { border-color: var(--accent); }
+.sbtn.dot { position: relative; }
+.sbtn.dot::after { content: ''; position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-2); box-shadow: 0 0 8px var(--accent-2); }
+#s-menu .m-ver { position: absolute; left: 24px; bottom: 12px; font-size: 12px; color: var(--muted); letter-spacing: 0.04em; font-variant-numeric: tabular-nums; }
+#s-menu .m-update { position: absolute; top: 18px; right: 22px; display: flex; align-items: center; gap: 12px; max-width: min(420px, calc(100vw - 44px)); padding: 9px 10px 9px 14px; border-radius: 10px; background: rgba(16, 40, 30, 0.92); border: 1px solid rgba(61, 220, 132, 0.6); box-shadow: var(--shadow); font-size: 14px; z-index: 2; }
+#s-menu .m-update.hidden { display: none; }
+.m-update span { flex: 1; }
+.cl-list { display: grid; gap: 10px; }
+.cl-entry { padding: 12px 14px; border-radius: 12px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--line); }
+.cl-entry.current { border-color: rgba(255, 107, 44, 0.55); background: rgba(255, 107, 44, 0.07); }
+.cl-entry header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.cl-v { font-family: var(--display); font-weight: 400; color: var(--accent-2); font-size: 15px; }
+.cl-t { font-weight: 700; flex: 1; min-width: 0; }
+.cl-entry .tag { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 7px; border-radius: 999px; background: var(--accent); color: #fff; }
+.cl-entry .tag.new { background: var(--accent-2); color: #10121a; }
+.cl-entry ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); line-height: 1.5; font-size: 14px; }
+.cl-entry li + li { margin-top: 3px; }
 .profile-card { position: absolute; right: 22px; bottom: 22px; display: flex; gap: 14px; align-items: center; padding: 12px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); backdrop-filter: blur(12px); cursor: pointer; }
 .profile-card:hover { border-color: var(--accent); }
 .profile-card .lv { font-family: var(--display); font-size: 22px; width: 50px; height: 50px; display: grid; place-items: center; border-radius: 12px; background: linear-gradient(135deg, var(--accent), var(--pink)); }

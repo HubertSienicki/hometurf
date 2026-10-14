@@ -5,8 +5,10 @@ import { PRESETS, buildPreset } from '../sim/presets.js';
 import { KEY_HELP } from '../input.js';
 import { xpFor } from '../profile.js';
 import { fmtTime, ordinal, escapeHtml } from '../sim/util.js';
+import { VERSION, BUILD, CHANGELOG } from '../version.js';
 
 const $ = id => document.getElementById(id);
+const cmpVersion = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); return 0; };
 const QUICK = ['GG!', 'Nice move!', 'Sorry!', 'Watch out behind you!'];
 const KIND = { practice: 'Practice', quali: 'Qualifying', race: 'Race' };
 
@@ -121,7 +123,9 @@ export class UI {
         this.overlay('s-pause', false);
         this.show(a === 'settings' ? 's-settings' : 's-controls', !this.returnToPause);
         break;
-      case 'settings-back': case 'controls-back': case 'tracks-back': case 'studio-back': this.back(); break;
+      case 'changelog': this.openChangelog(); break;
+      case 'reload': location.reload(); break;
+      case 'settings-back': case 'controls-back': case 'tracks-back': case 'studio-back': case 'changelog-back': this.back(); break;
       case 'menu': this.show('s-menu'); this.stack = []; break;
       case 'leave': this.confirmLeave(); break;
       case 'copy': this.copyInvite(); break;
@@ -158,6 +162,24 @@ export class UI {
     const p = this.profile, L = p.level, x0 = xpFor(L), x1 = xpFor(L + 1);
     $('m-profile').innerHTML = `<div class="lv">${L}</div><div><b>${escapeHtml(p.name)}</b><span class="muted small">${CARS[p.car].name} &middot; ${p.credits.toLocaleString()} cr</span><div class="xpbar"><i style="width:${Math.min(100, (p.xp - x0) / (x1 - x0) * 100)}%"></i></div></div>`;
     $('m-profile').onclick = () => this.app.openGarage();
+    $('m-ver').textContent = `v${VERSION}${BUILD.commit === 'dev' ? ' (dev)' : ` · ${BUILD.commit}`}`;
+    $('m-changes').classList.toggle('dot', p.d.seenVersion !== VERSION);
+    const up = this.app.update;
+    $('m-update').classList.toggle('hidden', !up);
+    if (up) $('m-update').innerHTML = `<span><b>v${escapeHtml(up.version)}</b> is out${up.version === VERSION ? ' (fixes)' : ''} - reload to update.</span><button class="btn primary small" data-act="reload">Reload</button>`;
+  }
+
+  openChangelog() {
+    const p = this.profile, seen = p.d.seenVersion;
+    $('cl-ver').textContent = `You have v${VERSION}`;
+    const newer = v => seen && cmpVersion(v, seen) > 0;
+    $('cl-list').innerHTML = CHANGELOG.map(e => `
+      <article class="cl-entry${e.v === VERSION ? ' current' : ''}">
+        <header><b class="cl-v">v${e.v}</b><span class="cl-t">${escapeHtml(e.title)}</span>${e.v === VERSION ? '<span class="tag">current</span>' : newer(e.v) ? '<span class="tag new">new</span>' : ''}<span class="muted small">${e.date}</span></header>
+        <ul>${e.items.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>
+      </article>`).join('');
+    p.d.seenVersion = VERSION; p.save();
+    this.show('s-changelog', true);
   }
 
   async refreshBrowser() {
@@ -166,7 +188,7 @@ export class UI {
     let rooms = [];
     try { rooms = await this.app.listRooms(); } catch (err) { list.innerHTML = `<div class="err">${escapeHtml(err.message)}</div>`; return; }
     if (!rooms.length) { list.innerHTML = '<div class="muted">No public rooms right now. Host one and tick "public"!</div>'; return; }
-    list.innerHTML = rooms.map(r => `<div class="b-room"><div class="grow"><b>${escapeHtml(r.name)}</b><span class="muted small">${escapeHtml(r.track)} &middot; ${r.players} player${r.players === 1 ? '' : 's'} + ${r.bots} bots &middot; ${r.phase === 'lobby' ? 'in lobby' : 'racing (join as spectator)'}</span></div><button class="btn primary small" data-code="${r.code}">Join</button></div>`).join('');
+    list.innerHTML = rooms.map(r => `<div class="b-room"><div class="grow"><b>${escapeHtml(r.name)}</b><span class="muted small">${escapeHtml(r.track)} &middot; ${r.players} player${r.players === 1 ? '' : 's'} + ${r.bots} bots &middot; ${r.phase === 'lobby' ? 'in lobby' : 'racing (join as spectator)'}${r.ver && r.ver !== VERSION ? ` &middot; v${escapeHtml(String(r.ver))}` : ''}</span></div><button class="btn primary small" data-code="${r.code}">Join</button></div>`).join('');
     list.querySelectorAll('[data-code]').forEach(b => b.addEventListener('click', () => this.app.join(b.dataset.code)));
   }
 
@@ -409,6 +431,7 @@ export class UI {
       <label>Steering assist <span class="small dim">(nudges you away from walls)</span></label>${seg('assist', [[true, 'On'], [false, 'Off']])}
       <label>Camera</label>${seg('cam', [['low', 'Low'], ['normal', 'Normal'], ['far', 'High & far']])}
       <label>Speed units</label>${seg('units', [['kmh', 'km/h'], ['mph', 'mph']])}
+      <label>Connection <span class="small dim">(Relay: for networks that block direct links - adds a little lag)</span></label>${seg('net', [['auto', 'Auto'], ['relay', 'Always relay']])}
       <label>Show FPS</label>${seg('showFps', [[true, 'On'], [false, 'Off']])}
       <label>Sandbox: unlock every part <span class="small dim">(for testing builds)</span></label>${seg('sandbox', [[true, 'On'], [false, 'Off']])}
       <p class="full muted small">Graphics changes apply after a page reload.</p>`;

@@ -1,0 +1,17 @@
+# HOME TURF relay (Cloudflare Workers, free plan).
+#   cd relay && npm install
+#   npx wrangler login      (once, opens Cloudflare in the browser)
+#   npx wrangler deploy     -> prints https://hometurf-relay.<you>.workers.dev
+# Put that URL in NET.RELAY (js/sim/config.js) and redeploy the game.
+# Local test: npx wrangler dev  ->  open the game with ?relay=ws://localhost:8787
+name = "hometurf-relay"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]

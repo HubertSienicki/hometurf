@@ -1,6 +1,6 @@
 # HOME TURF
 
-A 3D kart racer for the browser where **the tracks are your own streets**. Pick a neighbourhood on the map, drop a few waypoints, and the Track Studio turns those real roads into a circuit with the real buildings, parks and water around it. Then race your friends **peer-to-peer**: the host's browser is the server, so there's no backend.
+A 3D kart racer for the browser where **the tracks are your own streets**. Pick a neighbourhood on the map, drop a few waypoints, and the Track Studio turns those real roads into a circuit with the real buildings, parks and water around it. Then race your friends: the host's browser is the server. Players connect to it directly (WebRTC), or through a small relay when their network blocks direct links.
 
 ## Run it
 
@@ -12,19 +12,54 @@ npm run dev
 
 Then open <http://localhost:5174>. To try multiplayer on one machine, host in one tab and join with the room code in another.
 
+## Versions and releases
+
+The project is a git repository; every release is a tag (`v1.1.1`, `v1.2.0`, ...).
+
+- **`js/version.js`** holds `VERSION` and the changelog. The main menu shows the version (bottom left) and a **Changelog** button, which gets a dot after an update.
+- **`npm run build`** stamps the git commit into the build and writes `dist/version.json`, `CHANGELOG.md` and the `package.json` version.
+- **Update notice:** running games poll `version.json` every 5 minutes and when the tab regains focus. When a new deploy is out they offer a reload in the main menu, never mid-race.
+
+To release:
+1. Bump `VERSION` and add a changelog entry on top.
+2. `npm run build`, then commit and tag: `git tag -a v1.3.0 -m v1.3.0`.
+3. `npm run deploy`. It rebuilds from the clean commit and pushes to Netlify.
+
 ## Deploy (Netlify)
 
-Live at <https://hometurf-86d26fb3.netlify.app>. This folder is already linked to that site (`.netlify/state.json`). To ship an update:
+Live at <https://hometurf-86d26fb3.netlify.app>. This folder is already linked to that site (`.netlify/state.json`).
 
 ```bash
-npm run build
+npm run deploy
+```
+
+That runs `npm run build` and `netlify deploy --prod`. The build copies only the game files (`index.html`, `style.css`, `favicon.svg`, `js/`, `assets/`) into `dist/`. Everything is served with `must-revalidate`, so after a deploy every player gets the same version. Players on different protocol versions can't join each other's rooms.
+
+## Relay (for friends who can't connect)
+
+Some networks block direct browser-to-browser links: mobile data, CGNAT and strict routers. Players on those networks time out when joining. The relay in `relay/` fixes that. It is a Cloudflare Worker with one Durable Object per room, and it only forwards messages; the host's browser is still the game server.
+
+- **Hosts** register with PeerJS and the relay at once.
+- **Guests** try a direct link first. If it isn't open within 3 s or fails, the relay joins the race and the first link to open wins. Settings > Connection > **Always relay** skips the direct attempt.
+- **Cost:** the free Cloudflare plan is enough for a group of friends. Only relayed players use it, and idle rooms cost nothing because sockets hibernate.
+
+One-time setup (needs a free Cloudflare account):
+
+```bash
+cd relay && npm install
 ```
 
 ```bash
-npx netlify-cli deploy --prod --dir dist --no-build
+npx wrangler login
 ```
 
-`npm run build` copies only the game files (`index.html`, `style.css`, `favicon.svg`, `js/`) into `dist/`. Everything is served with `must-revalidate`, so after a deploy every player gets the same version. Players on different versions can't join each other's rooms.
+```bash
+npx wrangler deploy
+```
+
+`deploy` prints a URL like `https://hometurf-relay.<you>.workers.dev`. Put it in `NET.RELAY` in `js/sim/config.js`, then redeploy the game. With `RELAY` empty, the game uses direct links only.
+
+To test locally, run `npx wrangler dev` in `relay/`, then open the game at `http://localhost:5174/?relay=ws://127.0.0.1:8787`. The `?relay=` override only works on localhost.
 
 Your Netlify team protects new sites by default. This site is set like RICOCHAOS: **production is public**, and preview deploys still need a Netlify login.
 
@@ -82,11 +117,13 @@ js/sim/          pure simulation, shared by game, test bench and Node sim
   items.js       projectiles/hazards    parts.js    builds, mass coupling, upgrades
 js/game.js       client game: owned cars, remote interpolation, items, timing
 js/server.js     host room authority: lobby, sessions, results, points
-js/net.js        PeerJS host/client (from RICOCHAOS)
+js/net.js        host/client links: PeerJS (direct) + WebSocket relay fallback
+js/version.js    version + changelog (menu badge, CHANGELOG.md, version.json)
 js/vtiles.js     vector-tile decoder, street graph, scenery
 js/osm.js        Overpass, Nominatim, A* routing
 js/render/       three.js world, procedural cars, effects, cameras
 js/ui/           menus, lobby, garage, Track Studio, HUD
 js/audio.js      mixer, engine voices, effects, music
 js/engineWorklet.js   combustion-pulse engine synth (AudioWorklet)
+relay/           Cloudflare Worker relay (worker.js, wrangler.toml)
 ```

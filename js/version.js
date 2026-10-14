@@ -2,12 +2,16 @@
 // Changelog screen, CHANGELOG.md and dist/version.json (both written by
 // `npm run build`). To release: bump VERSION, add an entry on top, build,
 // commit, then `git tag vX.Y.Z` (see README).
-export const VERSION = '1.3.0';
+export const VERSION = '1.3.1';
 
 // Filled in by scripts/build.mjs from git; 'dev' when served from source.
 export const BUILD = { commit: 'dev', date: '' };
 
 export const CHANGELOG = [
+  {
+    v: '1.3.1', date: '2026-10-14', title: 'Relay switched on',
+    items: ['The relay server is live, so friends whose network blocks direct connections can join rooms.'],
+  },
   {
     v: '1.3.0', date: '2026-10-14', title: 'Engines and gearboxes',
     items: [

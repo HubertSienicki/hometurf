@@ -13,7 +13,7 @@ export const NET = {
   INTERP_MS: 110,     // remote cars are drawn this far in the past
   // WebSocket relay (relay/worker.js) for players whose network blocks WebRTC.
   // Empty = direct connections only.
-  RELAY: '',
+  RELAY: 'https://hometurf-relay.hometurf-relay.workers.dev',
 };
 
 export const PHYS = {

@@ -2,6 +2,10 @@
 
 Generated from `js/version.js` by `npm run build`.
 
+## 1.3.1 - Relay switched on (2026-10-14)
+
+- The relay server is live, so friends whose network blocks direct connections can join rooms.
+
 ## 1.3.0 - Engines and gearboxes (2026-10-14)
 
 - Every car now has a real engine and gearbox: torque curves, 5 to 7 gears, shift cuts and a rev limiter. Acceleration builds smoothly through the gears instead of snapping to top speed.

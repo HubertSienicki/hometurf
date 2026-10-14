@@ -42,7 +42,11 @@
     </div>
     <div class="hud-bc">
       <div id="h-tach"><canvas id="h-tach-c"></canvas><div id="h-gear">1</div><div id="h-speed"></div><div id="h-rpm"></div></div>
-      <div id="h-tyres" class="hidden"><div class="ty-car"><i></i><i></i><i></i><i></i></div><b>100%</b><small>TYRES</small></div>
+      <div id="h-tyres" class="hidden">
+        <div class="ty-car"><i><u></u><em></em></i><i><u></u><em></em></i><i><u></u><em></em></i><i><u></u><em></em></i></div>
+        <div class="ty-row"><span class="ty-cmp">M</span><b>100%</b></div>
+        <small id="ty-note">TYRES</small>
+      </div>
       <div id="h-pit" class="hidden"></div>
       <div id="h-charge"><div></div></div>
     </div>
@@ -55,6 +59,7 @@
       <h4>PIT STOP</h4>
       <div class="q-wheels"><span>FL</span><span>FR</span><span>RL</span><span>RR</span></div>
       <div class="q-bar"><i class="q-zone"></i><i class="q-mark"></i></div>
+      <div class="q-cmp" id="q-cmp"></div>
       <small id="q-hint">Press SPACE in the green</small>
     </div>
     <div id="h-tab" class="hidden"></div>
@@ -169,6 +174,7 @@
           </div>
         </div>
         <div class="panel l-settings" id="l-settings"></div>
+        <div class="panel l-strategy hidden" id="l-strategy"></div>
         <div class="panel l-standings hidden" id="l-standings"></div>
       </div>
       <div class="panel l-chat">

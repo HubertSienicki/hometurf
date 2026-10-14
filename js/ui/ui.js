@@ -6,6 +6,7 @@ import { KEY_HELP } from '../input.js';
 import { xpFor } from '../profile.js';
 import { fmtTime, ordinal, escapeHtml } from '../sim/util.js';
 import { VERSION, BUILD, CHANGELOG } from '../version.js';
+import { COMPOUNDS } from '../sim/tyres.js';
 
 const $ = id => document.getElementById(id);
 const cmpVersion = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); return 0; };
@@ -303,6 +304,8 @@ export class UI {
     $('l-savetrack').classList.toggle('hidden', !t || !!t.preset);
     // settings
     this.renderRoomSettings(room);
+    this.renderStrategy(room);
+    this.app.ensureStrategy?.(room);
     // standings
     const st = Object.entries(room.standings || {}).sort((a, b) => b[1] - a[1]);
     $('l-standings').classList.toggle('hidden', !st.length);
@@ -319,6 +322,35 @@ export class UI {
     const label = room.phase === 'session' ? 'Back to the race' : room.phase !== 'lobby' ? 'Session running' : s.mode === 'weekend' ? (room.weekend?.stage === 'practice' ? 'Start Qualifying' : room.weekend?.stage === 'quali' ? 'Start Race' : 'Start Practice') : 'Start Race';
     $('l-start').textContent = label;
     $('l-start').disabled = !(room.phase === 'session' || (room.phase === 'lobby' && t));
+  }
+
+  // Tyre strategy (pit-stop races): what the simulation found for your car on
+  // this track; click one to make it your plan.
+  renderStrategy(room) {
+    const el = $('l-strategy'), s = room.settings;
+    const on = !!(s.pitstops && room.track?.pit);
+    el.classList.toggle('hidden', !on);
+    if (!on) return;
+    const st = this.app.strategyState?.() || {};
+    const chip = (cmp, n) => `<span class="tchip" style="--c:${COMPOUNDS[cmp].color}"><b>${cmp}</b>${n != null ? `<i>${n}</i>` : ''}</span>`;
+    let body;
+    if (st.busy) body = '<p class="muted">Simulating your car on each compound...</p>';
+    else if (st.error) body = `<p class="err">${escapeHtml(st.error)}</p>`;
+    else if (!st.plans?.length) body = '<p class="muted">No strategy yet.</p>';
+    else {
+      body = '<div class="strat-list">' + st.plans.map((p, i) => `
+        <button class="strat ${st.pick === i ? 'on' : ''}" data-plan="${i}">
+          <span class="stints">${p.stints.map((x, k) => (k ? '<span class="arrow">&rsaquo;</span>' : '') + chip(x.cmp, x.laps)).join('')}</span>
+          <span class="muted small">${p.stops} stop${p.stops > 1 ? 's' : ''}</span>
+          <b class="t">${i === 0 ? 'FASTEST' : `+${p.delta.toFixed(1)} s`}</b>
+        </button>`).join('') + '</div>';
+      const tb = st.sim?.table;
+      if (tb) body += `<details class="strat-sim"><summary>Simulated lap times per compound</summary><table>${Object.keys(tb).map(c => `<tr><td>${chip(c)}</td>${tb[c].slice(0, 10).map(t => `<td>${t.toFixed(1)}</td>`).join('')}</tr>`).join('')}</table><p class="muted small">A pit stop costs about ${st.sim.pitLoss.toFixed(1)} s here.</p></details>`;
+    }
+    el.innerHTML = `<h3>Tyre strategy <span class="muted small">simulated for your ${CARS[this.profile.car].name}</span></h3>${body}
+      <p class="muted small">At least one stop is mandatory. Your plan sets your starting tyres and the HUD tells you when to box; in the box press 1-4 to fit a different compound.</p>
+      <div class="tlegend">${Object.entries(COMPOUNDS).map(([id, C]) => `${chip(id)} ${C.name}`).join(' ')}</div>`;
+    el.querySelectorAll('[data-plan]').forEach(b => b.addEventListener('click', () => { this.app.pickStrategy(+b.dataset.plan); this.app.audio.sfx('click'); }));
   }
 
   renderRoomSettings(room) {
@@ -381,7 +413,7 @@ export class UI {
     $('r-title').textContent = `${KIND[r.kind]} results`;
     const best = r.bestSecs || [];
     const rows = r.rows.map(row => {
-      const time = race ? (row.fin ? (row.pos === 1 ? fmtTime(row.total) : `+${((row.gap) / 1000).toFixed(3)}`) : `DNF${row.laps ? ` (${row.laps} laps)` : ''}`) : (row.best != null ? (row.pos === 1 ? fmtTime(row.best) : `+${(row.gap / 1000).toFixed(3)}`) : 'no time');
+      const time = race ? (row.dsq ? 'DSQ - no pit stop' : row.fin ? (row.pos === 1 ? fmtTime(row.total) : `+${((row.gap) / 1000).toFixed(3)}`) : `DNF${row.laps ? ` (${row.laps} laps)` : ''}`) : (row.best != null ? (row.pos === 1 ? fmtTime(row.best) : `+${(row.gap / 1000).toFixed(3)}`) : 'no time');
       const fl = r.fastest?.id === row.id;
       const secs = !race && row.bestSecs ? row.bestSecs.map((t, k) => `<span class="${t != null && t === best[k] ? 'purple' : ''}">${t != null ? (t / 1000).toFixed(3) : '-'}</span>`).join(' / ') : '';
       return `<tr class="${row.id === me ? 'me' : ''}"><td class="pos">${row.pos}</td><td><span class="sw" style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${row.color};margin-right:8px"></span>${escapeHtml(row.name)}${row.bot ? ' <span class="badge bot">bot</span>' : ''}</td><td class="muted">${CARS[row.car]?.name || ''}</td><td class="t">${time}</td><td class="t ${fl ? 'purple' : ''}">${row.best != null ? fmtTime(row.best) : '-'}</td>${race ? `<td class="pts">${row.pts ? '+' + row.pts : ''}</td>` : `<td class="t small">${secs}</td>`}</tr>`;

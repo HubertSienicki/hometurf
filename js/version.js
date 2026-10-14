@@ -2,12 +2,23 @@
 // Changelog screen, CHANGELOG.md and dist/version.json (both written by
 // `npm run build`). To release: bump VERSION, add an entry on top, build,
 // commit, then `git tag vX.Y.Z` (see README).
-export const VERSION = '1.4.0';
+export const VERSION = '1.5.0';
 
 // Filled in by scripts/build.mjs from git; 'dev' when served from source.
 export const BUILD = { commit: 'dev', date: '' };
 
 export const CHANGELOG = [
+  {
+    v: '1.5.0', date: '2026-10-14', title: 'Tyre compounds and strategy',
+    items: [
+      'Four tyre compounds for pit-stop races, like old F1: Ultrasoft (purple), Soft (red), Medium (yellow) and Hard (white). Softer tyres grip more and warm up quicker, but wear faster and overheat sooner.',
+      'Every tyre has its own temperature and wear. Cornering loads the outside tyres, so a right-hander heats and wears the left side; braking works the fronts, traction and drifting cook the rears. Hot tyres wear much faster, cold or overheated ones grip less.',
+      'Worn tyres now hurt drifting properly: tired rears slide wide and charge mini-turbos slowly, tired fronts won\'t turn in.',
+      'Pit-stop races need at least one stop. Finish without one and you are disqualified.',
+      'Tyre strategy in the lobby: the game simulates your car on this track on every compound and ranks the best plans. Pick one: it sets your starting tyres and the HUD tells you when to box. In the box, keys 1-4 (or the d-pad) change the compound.',
+      'Bots run their own strategies. The standings show everyone\'s tyres, and the tyre gauge shows each wheel\'s temperature and wear.',
+    ],
+  },
   {
     v: '1.4.0', date: '2026-10-14', title: 'Accounts and pit stops',
     items: [

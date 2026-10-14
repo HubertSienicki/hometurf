@@ -13,6 +13,7 @@ import { HostNet, ClientNet, randomCode, normalizeCode, probePublicRooms, claimP
 import { NET } from './sim/config.js';
 import { VERSION, BUILD } from './version.js';
 import { Account } from './account.js';
+import { TYRE } from './sim/tyres.js';
 import { PRESETS, buildPreset } from './sim/presets.js';
 
 const $ = id => document.getElementById(id);
@@ -29,6 +30,12 @@ catch (err) {
 const hud = new HUD(profile);
 
 const account = new Account(profile, store);
+
+// Tyre strategies (pit-stop races): simulated in a worker for my car on the
+// room's track whenever the track, laps, wear or my car changes.
+const strat = { key: '', busy: false, plans: null, sim: null, error: null, pick: 0, id: 0, worker: null };
+const myPlan = () => strat.plans?.[strat.pick] || null;
+const allPlans = () => strat.plans;
 const app = {
   profile, store, audio, view, input, hud, account,
   server: null, net: null, game: null, isHost: false, myId: null, room: null, attract: null,
@@ -89,7 +96,7 @@ function stopAttract() {
 function createHostRoom({ net = null, code = null, pub = false }) {
   stopAttract();
   let server = null;
-  const game = new Game({ view, hud, audio, input, profile, ui: makeBridge(), send: m => server.receive('p0', m), myId: 'p0', isHost: true, offline: !net });
+  const game = new Game({ view, hud, audio, input, profile, ui: makeBridge(), send: m => server.receive('p0', m), myId: 'p0', isHost: true, offline: !net, plan: myPlan, plans: allPlans });
   server = new HostServer({ net, hello: profile.hello(), onLocal: m => game.onMessage(m), code, saved: { ...profile.d.host, public: pub } });
   Object.assign(app, { server, net, game, isHost: true, myId: 'p0' });
   view.mode = 'lobby';
@@ -144,7 +151,7 @@ app.join = async raw => {
   try {
     const welcome = await net.connect(code, { t: 'hello', proto: NET.PROTO, ver: VERSION, ...profile.hello() }, { mode: profile.settings.net });
     stopAttract();
-    const game = new Game({ view, hud, audio, input, profile, ui: makeBridge(), send: (m, rel) => net.send(m, rel), myId: welcome.id, isHost: false });
+    const game = new Game({ view, hud, audio, input, profile, ui: makeBridge(), send: (m, rel) => net.send(m, rel), myId: welcome.id, isHost: false, plan: myPlan, plans: allPlans });
     net.onMessage = m => game.onMessage(m);
     net.onClose = () => { if (app.net === net) { leave(); ui.modal({ title: 'Disconnected', body: '<p>The host closed the room or the connection dropped.</p>' }); } };
     Object.assign(app, { server: null, net, game, isHost: false, myId: welcome.id });
@@ -180,6 +187,28 @@ function leave() {
   startAttract();
 }
 app.leave = leave;
+
+app.strategyState = () => strat;
+app.pickStrategy = i => { strat.pick = i; if (app.room) ui.renderStrategy(app.room); };
+app.ensureStrategy = room => {
+  const s = room?.settings, data = app.game?.trackData;
+  if (!s?.pitstops || !room.track?.pit || !data?.pit) return;
+  const wear = TYRE.rates[s.tyreWear] ?? 1, laps = Math.max(2, s.laps), build = profile.build();
+  const key = [room.track.hash, laps, wear, profile.car, JSON.stringify(build), !s.upgrades].join('|');
+  if (key === strat.key) return;
+  Object.assign(strat, { key, busy: true, plans: null, sim: null, error: null, pick: 0 });
+  const id = ++strat.id;
+  if (!strat.worker) {
+    strat.worker = new Worker(new URL('./strategyWorker.js', import.meta.url), { type: 'module' });
+    strat.worker.onmessage = e => {
+      if (e.data.id !== strat.id) return;
+      strat.busy = false;
+      if (e.data.error) strat.error = e.data.error; else { strat.plans = e.data.plans; strat.sim = e.data.sim; }
+      if (app.room) ui.renderStrategy(app.room);
+    };
+  }
+  strat.worker.postMessage({ id, track: data, type: profile.car, build, laps, wear, equalize: !s.upgrades });
+};
 
 app.chat = text => { if (app.game) app.game.send({ t: 'chat', text }); };
 app.sendProfile = () => { if (app.game) app.game.send({ t: 'prof', ...profile.hello() }); };

@@ -168,7 +168,7 @@ export class HostServer {
   // ------------------------------------------------------------ host controls
   setSettings(patch) {
     for (const [k, v] of Object.entries(patch)) if (k in DEFAULT_SETTINGS) this.settings[k] = v;
-    this.settings.laps = Math.max(1, Math.min(20, this.settings.laps | 0));
+    this.settings.laps = Math.max(this.settings.pitstops ? 2 : 1, Math.min(20, this.settings.laps | 0));   // a mandatory stop needs 2 laps
     this.settings.bots = Math.max(0, Math.min(NET.MAX_CARS - 1, this.settings.bots | 0));
     this.settings.botLevel = Math.max(0, Math.min(BOT_LEVELS.length - 1, this.settings.botLevel | 0));
     this.syncBots();
@@ -222,7 +222,7 @@ export class HostServer {
       tod: s.tod, pits: !!s.pitstops, wear: s.tyreWear, state: 'run', flagAt: null, finishBy: null,
     };
     this.timing = {};
-    for (const id of grid) this.timing[id] = { laps: 0, best: null, last: null, bestSecs: [null, null, null], cur: [null, null, null], fin: false, total: null, done: false, hits: 0 };
+    for (const id of grid) this.timing[id] = { laps: 0, best: null, last: null, bestSecs: [null, null, null], cur: [null, null, null], fin: false, total: null, done: false, hits: 0, stops: 0 };
     this.sessBest = { secs: [null, null, null], lap: null, lapId: null };
     this.finOrder = [];
     this.results = null;
@@ -277,14 +277,17 @@ export class HostServer {
     const sess = this.session;
     const rows = sess.grid.filter(id => sess.cars[id]).map(id => {
       const t = this.timing[id] || {}, c = sess.cars[id], st = this.states.get(id);
-      return { id, name: c.name, car: c.car, color: c.color, bot: c.bot, best: t.best, laps: t.laps || 0, total: t.total, fin: !!t.fin, P: st ? st[10] : -1e9, hits: t.hits || 0, bestSecs: t.bestSecs, gone: !this.players.has(id) };
+      // pit-stop races: finishing without the mandatory stop is a disqualification
+      const dsq = !!(sess.pits && sess.kind === 'race' && t.fin && !(t.stops > 0));
+      return { id, name: c.name, car: c.car, color: c.color, bot: c.bot, best: t.best, laps: t.laps || 0, total: t.total, fin: !!t.fin, dsq, stops: t.stops || 0, P: st ? st[10] : -1e9, hits: t.hits || 0, bestSecs: t.bestSecs, gone: !this.players.has(id) };
     });
     if (sess.kind === 'race') {
-      rows.sort((a, b) => (b.fin - a.fin) || (a.fin ? a.total - b.total : 0) || (b.laps - a.laps) || (b.P - a.P));
+      const cls = r => (r.dsq ? 2 : r.fin ? 0 : 1);   // finishers, then retirements, then disqualified
+      rows.sort((a, b) => (cls(a) - cls(b)) || (cls(a) !== 1 ? a.total - b.total : 0) || (b.laps - a.laps) || (b.P - a.P));
       const n = rows.length;
-      rows.forEach((r, i) => { r.pos = i + 1; r.pts = n > 1 && !r.gone ? (POINTS[i] || 0) : 0; r.dnf = !r.fin; });
+      rows.forEach((r, i) => { r.pos = i + 1; r.pts = n > 1 && !r.gone && !r.dsq ? (POINTS[i] || 0) : 0; r.dnf = !r.fin; });
       const lead = rows[0];
-      for (const r of rows) r.gap = r.fin && lead.fin ? r.total - lead.total : null;
+      for (const r of rows) r.gap = r.fin && lead.fin && !r.dsq ? r.total - lead.total : null;
     } else {
       rows.sort((a, b) => (a.best == null) - (b.best == null) || (a.best - b.best));
       rows.forEach((r, i) => { r.pos = i + 1; r.gap = r.best != null && rows[0].best != null ? r.best - rows[0].best : null; });
@@ -353,6 +356,7 @@ export class HostServer {
     if (!sess || !t || sess.state === 'done') return;
     const ms = typeof m.ms === 'number' && m.ms > 0 ? Math.round(m.ms) : null;
     const k = m.k | 0;
+    if (typeof m.stops === 'number') t.stops = Math.max(t.stops || 0, Math.min(20, m.stops | 0));
     if (k < 0 || k > 2) return;
     if (ms != null) {
       t.cur[k] = ms;

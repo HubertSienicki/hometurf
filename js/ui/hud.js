@@ -2,7 +2,8 @@
 import { ITEM_ICONS, ABILITY_ICONS } from './icons.js';
 import { ITEMS, ABILITIES, CARS, ITEM_TUNE, SPEEDO } from '../sim/config.js';
 import { GEARBOX, gearLabel } from '../sim/drivetrain.js';
-import { PIT, TYRE, pitZone, boxCentre } from '../sim/pit.js';
+import { PIT, pitZone, boxCentre } from '../sim/pit.js';
+import { TYRE, COMPOUNDS, tyreColor } from '../sim/tyres.js';
 import { fmtTime, ordinal, escapeHtml, clamp } from '../sim/util.js';
 
 const $ = id => document.getElementById(id);
@@ -135,7 +136,7 @@ export class HUD {
       const mph = this.profile.settings.units === 'mph';
       $('h-speed').innerHTML = `<b>${Math.round(mph ? kmh * 0.621 : kmh)}</b><i>${mph ? 'mph' : 'km/h'}</i>`;
       this.tach(c, focus === me && !!c.manual);
-      this.tyres(c, game.wear > 0);
+      this.tyres(c, game.wear > 0, focus.owned && game.session?.kind === 'race' ? (c.stops ? `${c.stops} STOP${c.stops > 1 ? 'S' : ''}` : 'STOP NEEDED') : 'TYRES');
       this.pitInfo(game, focus);
       const ch = $('h-charge');
       const T = [0.7, 1.5, 2.4];
@@ -220,7 +221,8 @@ export class HUD {
         }).join('') + '</span>';
       }
       const fl = room?.best?.lapId === e.id && s.kind !== 'race' ? ' fastest' : '';
-      rows.push(`<li class="${e === focus ? 'me' : ''}${e.finished ? ' fin' : ''}${fl}"><b>${e.rank + 1}</b><span class="dot" style="background:${e.color}"></span><span class="nm">${escapeHtml(e.name)}</span>${secs}<span class="gap">${right}</span></li>`);
+      const tyre = game.pits && e.c.cmp ? `<span class="tc" style="--c:${COMPOUNDS[e.c.cmp]?.color || '#fff'}">${e.c.inPit ? 'P' : e.c.cmp}</span>` : '';
+      rows.push(`<li class="${e === focus ? 'me' : ''}${e.finished ? ' fin' : ''}${fl}"><b>${e.rank + 1}</b><span class="dot" style="background:${e.color}"></span><span class="nm">${escapeHtml(e.name)}</span>${secs}${tyre}<span class="gap">${right}</span></li>`);
     }
     $('h-tower').innerHTML = rows.slice(0, 12).join('');
     $('h-tab').innerHTML = `<h3>${{ race: 'Race', quali: 'Qualifying', practice: 'Practice' }[s.kind]} standings</h3><ol>${rows.join('')}</ol>`;
@@ -326,20 +328,29 @@ export class HUD {
     $('h-rpm').textContent = `${(Math.round(rpm / 50) * 50).toLocaleString()} rpm${geared ? (manual ? ' · MANUAL' : ' · AUTO') : ''}`;
   }
 
-  // Tyre wear: four wheels from green to red, and the grip left.
-  tyres(c, on) {
+  // Tyres: each wheel coloured by temperature (blue cold, green in the window,
+  // orange / red overheating), darkened from the top as it wears, with its
+  // temperature beside it; the compound and the rubber left underneath.
+  tyres(c, on, note) {
     const el = this.tyEl || (this.tyEl = $('h-tyres'));
     el.classList.toggle('hidden', !on);
-    if (!on) return;
-    const w = c.tyre || 0;
-    if (Math.abs(w - (this.tyW ?? -1)) < 0.004) return;
-    this.tyW = w;
-    [1.06, 1.06, 0.94, 0.94].forEach((k, i) => {
-      const x = clamp(w * k, 0, 1);
-      el.querySelectorAll('i')[i].style.background = `hsl(${Math.round(125 * (1 - x) ** 1.3)}, 80%, ${50 - 8 * x}%)`;
-    });
-    el.querySelector('b').textContent = `${Math.round((1 - w) * 100)}%`;
-    el.classList.toggle('worn', w > TYRE.cliff);
+    if (!on || !c.tw) return;
+    this.tyT = (this.tyT || 0) + 1;
+    if (this.tyT % 6) return;            // ~10 updates a second is plenty
+    const wheels = el.querySelectorAll('.ty-car i');
+    for (let i = 0; i < 4; i++) {
+      const w = wheels[i];
+      w.style.background = tyreColor(c.cmp, c.tt[i]);
+      w.firstElementChild.style.height = `${Math.round(clamp(c.tw[i], 0, 1) * 100)}%`;
+      w.lastElementChild.textContent = Math.round(c.tt[i]);
+    }
+    const C = COMPOUNDS[c.cmp] || COMPOUNDS.M, chip = el.querySelector('.ty-cmp');
+    chip.textContent = c.cmp; chip.style.setProperty('--c', C.color);
+    const worst = Math.max(...c.tw);
+    el.querySelector('b').textContent = `${Math.round((1 - c.tyre) * 100)}%`;
+    el.classList.toggle('worn', worst > TYRE.cliff);
+    const n = $('ty-note');
+    if (n.textContent !== note) n.textContent = note;
   }
 
   // Pit lane prompts: where the entry is when the tyres are gone, the limiter, the box.
@@ -354,9 +365,17 @@ export class HUD {
         html = `<span class="lim">PIT LIMITER ${PIT.limitKmh}</span>`;
         if (!c.pitDone && game.wear > 0 && toBox < 200) html += `<span class="box">${toBox < 12 ? 'STOP IN THE BOX' : `BOX IN ${Math.round(toBox)} m`}</span>`;
       } else if (c.inPit) html = `<span class="lim">PIT LANE</span>`;
-      else if (!z && game.wear > 0 && c.tyre > 0.5) {
-        const d = game.track.wrapS(pit.s0 - c.lastS);
-        if (d < 300) html = `<span class="box">PIT ENTRY ${pit.side > 0 ? '&larr; LEFT' : 'RIGHT &rarr;'} ${Math.round(d)} m</span>`;
+      else if (!z && game.wear > 0) {
+        const d = game.track.wrapS(pit.s0 - c.lastS), done = c.P / game.track.L, s = game.session;
+        const stop = game.nextStop(focus), left = s.kind === 'race' ? s.laps - done : 99;
+        const planned = stop && done > stop.lap - 0.75 && left > 0.6;
+        const mandatory = s.kind === 'race' && !c.stops && left < 1.7 && left > 0.6;
+        const worn = Math.max(...c.tw) > 0.55;
+        if ((planned || mandatory || worn) && d < 420) {
+          const side = pit.side > 0 ? '&larr; LEFT' : 'RIGHT &rarr;';
+          const what = planned ? `BOX THIS LAP: ${COMPOUNDS[stop.cmp].name.toUpperCase()}` : mandatory ? 'MANDATORY STOP - BOX THIS LAP' : 'PIT ENTRY';
+          html = `<span class="box">${what} &middot; ${side} ${Math.round(d)} m</span>`;
+        }
       }
     }
     if (html !== this.pitHtml) { this.pitHtml = html; el.innerHTML = html; el.classList.toggle('hidden', !html); }
@@ -372,6 +391,12 @@ export class HUD {
     zone.style.left = `${q.zone[0] * 100}%`; zone.style.width = `${(q.zone[1] - q.zone[0]) * 100}%`;
     mark.style.left = `${q.x * 100}%`;
     el.classList.toggle('done', q.wheel >= 4);
+    const key = q.cmp + (pad ? 'p' : 'k');
+    if (this.qCmp !== key) {
+      this.qCmp = key;
+      $('q-cmp').innerHTML = `<span class="lab">Fitting</span>` + Object.entries(COMPOUNDS).map(([id, C], i) =>
+        `<span class="chip ${id === q.cmp ? 'on' : ''}" style="--c:${C.color}"><b>${id}</b>${pad ? '' : `<i>${i + 1}</i>`}</span>`).join('') + `<span class="lab">${pad ? 'D-pad' : 'keys 1-4'}</span>`;
+    }
     $('q-hint').textContent = q.wheel >= 4 ? 'Dropping the car...' : `Press ${pad ? 'RB' : 'SPACE'} in the green`;
   }
 

@@ -5,7 +5,7 @@ import { NET, PHYS, CARS, ITEMS, ITEM_TUNE, ABILITY, BOT_LEVELS } from './sim/co
 import { Track } from './sim/track.js';
 import { makeCarState, stepCar, collideCars, placeCar, respawn, teleportAlong, applyBoost, stun } from './sim/physics.js';
 import { BotBrain } from './sim/ai.js';
-import { TYRE } from './sim/pit.js';
+import { TYRE, COMPOUNDS, COMPOUND_IDS } from './sim/tyres.js';
 import { ItemWorld, rollItem } from './sim/items.js';
 import { clamp, wrapAngle, lerp, lerpAngle, mulberry32, hashString } from './sim/util.js';
 
@@ -18,6 +18,7 @@ const r1 = v => Math.round(v * 10) / 10, r2 = v => Math.round(v * 100) / 100, r3
 export const F = {
   DRIFT: 1, DRIFT_R: 2, TIER: 12, BOOST: 16, SHIELD: 32, STAR: 64, RAM: 128, MIRROR: 256, GHOST: 512,
   SPIN: 1024, TUMBLE: 2048, BRAKE: 4096, FIN: 8192, TRICK: 16384, SLOW: 32768, WALL: 65536, INK: 131072, PIT: 262144,
+  CMP_SHIFT: 19,   // two bits: tyre compound (pit-stop races)
 };
 
 // Pit stop quick-time event: one press per wheel while the marker crosses the green.
@@ -61,6 +62,7 @@ export class Game {
   constructor(o) {
     this.view = o.view; this.hud = o.hud; this.audio = o.audio; this.input = o.input; this.profile = o.profile; this.ui = o.ui;
     this.sendFn = o.send; this.myId = o.myId; this.isHost = !!o.isHost; this.offline = !!o.offline;
+    this.planFn = o.plan || (() => null); this.plansFn = o.plans || (() => null);   // tyre strategies (lobby)
     this.clock = new Clock(this.isHost);
     this.room = null; this.trackData = null; this.track = null; this.trackHash = null; this.chunks = null;
     this.session = null; this.sessionId = 0; this.pendingSession = null;
@@ -166,14 +168,14 @@ export class Game {
     });
     for (const id of [...this.cars.keys()]) this.view.removeCar(id);
     this.cars.clear();
+    // pit-stop races: the pit lane opens and tyres wear; other races have neither
+    this.pits = !!(sess.pits && this.track.pit);
+    this.wear = this.pits ? TYRE.rates[sess.wear] ?? 1 : 0;
     sess.grid.forEach((id, k) => this.addSessionCar(id, k));
     this.me = this.cars.get(this.myId) || null;
     this.spectate = this.me ? null : sess.grid[0];
     this.acc = 0; this.beeped = 99; this.goT = (this.clock.now() - sess.startAt) / 1000;
     this.view.setTheme(sess.tod || 'day');
-    // pit-stop races: the pit lane opens and tyres wear; other races have neither
-    this.pits = !!(sess.pits && this.track.pit);
-    this.wear = this.pits ? TYRE.rates[sess.wear] ?? 1 : 0;
     this.view.world?.setPitOpen?.(this.pits);
     this.pitQ = null; this.hud.pitQTE(null);
     this.view.sessionStart(this.boxes, sess.items, sess.ghost);
@@ -190,6 +192,7 @@ export class Game {
     e.order = k;
     let slot = this.track.gridSlot(k);
     if (info.late) slot = this.track.gridSlot(Math.min(k, 11));
+    if (this.pits && owned) { e.plan = this.carPlan(e, k); e.c.cmp = e.plan.stints[0].cmp; }
     placeCar(e.c, this.track, slot);
     e.px = e.c.x; e.pz = e.c.z; e.ph = e.c.h;
     e.bIdx = this.track.boundaryIndex(e.c.P);
@@ -229,6 +232,10 @@ export class Game {
     if (inp.shiftDown) this.edges.shiftDown = true;
     if (inp.itemP) this.edges.itemP = true;
     if (inp.abilityP) this.edges.abilityP = true;
+    if (this.pitQ) {
+      if (inp.quick) { this.pitQ.cmp = COMPOUND_IDS[inp.quick - 1]; this.audio.sfx('click'); inp.quick = 0; }
+      if (inp.specNext || inp.specPrev) { const i = COMPOUND_IDS.indexOf(this.pitQ.cmp); this.pitQ.cmp = COMPOUND_IDS[(i + (inp.specNext ? 1 : 3)) % 4]; this.audio.sfx('click'); }
+    }
     this.handleKeys(inp);
     if (this.pitQ) this.pitQTE(dt, inp);
     // Missing the room's track (lost in transit, or joined mid-transfer)? Ask again.
@@ -328,7 +335,7 @@ export class Game {
       if (c.inkT > 0 && e.bot && !e.finished) ci.steer = clamp(ci.steer + Math.sin(this.now / 180 + e.order) * 0.6, -1, 1);
       e.prevP = c.P;
       stepCar(c, ci, tr, dt, { allowDrive: started, topMul: this.topMul(e), pits: this.pits, wear: this.wear });
-      if (e === this.me && this.wear && c.tyre > TYRE.cliff && !e.tyreWarned) { e.tyreWarned = true; this.hud.popup('TYRES GONE - BOX, BOX!', 'bad'); this.audio.sfx('deny'); }
+      if (e === this.me && this.wear && Math.max(...c.tw) > TYRE.cliff && !e.tyreWarned) { e.tyreWarned = true; this.hud.popup('TYRES GONE - BOX, BOX!', 'bad'); this.audio.sfx('deny'); }
       e.steerVis += (ci.steer - e.steerVis) * Math.min(1, dt * 12);
       e.brakeVis = ci.brake > 0.1 && c.vf > 1;
       this.carEvents(e);
@@ -472,7 +479,8 @@ export class Game {
     if (c.pitT > 0) return;
     if (e === this.me && !e.finished) {
       c.pitT = 99;   // held until the crew is done
-      this.pitQ = { wheel: 0, x: 0, dir: 1, sweeps: 0, wait: 0, zone: this.qteZone(), res: [], t0: performance.now() };
+      const stop = this.nextStop(e);
+      this.pitQ = { wheel: 0, x: 0, dir: 1, sweeps: 0, wait: 0, zone: this.qteZone(), res: [], t0: performance.now(), cmp: stop?.cmp || c.cmp };
       this.audio.sfx('pitin');
     } else c.pitT = 2.2 + this.rng() * 0.9 + (2 - (e.level ?? 1)) * 0.4;   // bots: a decent crew, better for better bots
   }
@@ -485,7 +493,7 @@ export class Game {
         q.wait -= dt;
         if (q.wait <= 0) {
           q.wheel++;
-          if (q.wheel >= 4) { c.pitT = QTE.jack; q.stop = (performance.now() - q.t0) / 1000 + QTE.jack; }
+          if (q.wheel >= 4) { c.pitT = QTE.jack; c.nextCmp = q.cmp; q.stop = (performance.now() - q.t0) / 1000 + QTE.jack; }
           else { q.zone = this.qteZone(); q.x = 0; q.dir = 1; q.sweeps = 0; }
         }
       } else {
@@ -507,15 +515,41 @@ export class Game {
     const q = this.pitQ, t = q?.stop;
     this.pitQ = null; this.hud.pitQTE(null);
     const perfect = q && q.res.every(r => r === 'perfect');
-    this.hud.popup(t ? `PIT STOP ${t.toFixed(1)} s${perfect ? ' - PERFECT' : ''}` : 'NEW TYRES', perfect ? 'shift' : 'good');
+    const tyres = (COMPOUNDS[e.c.cmp]?.name || 'new').toUpperCase() + 'S';
+    this.hud.popup(t ? `PIT STOP ${t.toFixed(1)} s - ${tyres}${perfect ? ' - PERFECT' : ''}` : tyres, perfect ? 'shift' : 'good');
     this.audio.sfx('pitout');
   }
-  // Bots pit on worn tyres when there's racing left to make it pay.
+  // Tyre plan for an owned car: the player's pick from the lobby, bots one of
+  // the simulated strategies (better bots take better ones), else a safe one-stop.
+  carPlan(e, k) {
+    const laps = this.session.kind === 'race' ? this.session.laps : 99;
+    const valid = p => p?.stints?.length && p.stints.reduce((a, s) => a + s.laps, 0) === laps;
+    if (e === this.me || e.id === this.myId) { const p = this.planFn(); if (valid(p)) return p; }
+    const plans = (this.plansFn() || []).filter(valid);
+    if (e.bot && plans.length) return plans[(k + (2 - (e.level ?? 1))) % Math.min(plans.length, 2 + (2 - (e.level ?? 1)))];
+    const a = Math.ceil(laps / 2);
+    return { stints: laps >= 99 ? [{ cmp: 'S', laps: 99 }] : [{ cmp: 'M', laps: a }, { cmp: 'H', laps: laps - a }] };
+  }
+  // The planned stop for this car: { lap (stop at the end of it), cmp } or null.
+  nextStop(e) {
+    const st = e.plan?.stints, k = e.c.stops;
+    if (!st || k >= st.length - 1) return null;
+    return { lap: st.slice(0, k + 1).reduce((a, s) => a + s.laps, 0), cmp: st[k + 1].cmp };
+  }
+  // Bots follow their plan; everyone must stop once (it's mandatory) and nobody
+  // runs tyres into the ground with racing left.
   botWantsPit(e) {
     const c = e.c, s = this.session;
-    if (!this.wear || !this.pits || c.pitDone || c.tyre < 0.62) return false;
-    if (s.kind !== 'race') return true;
-    return s.laps - c.P / this.track.L > 0.9;
+    if (!this.wear || !this.pits || c.pitDone) return false;
+    const done = c.P / this.track.L;
+    if (s.kind !== 'race') { if (Math.max(...c.tw) > 0.7) { c.nextCmp = c.cmp; return true; } return false; }
+    const left = s.laps - done;
+    if (left < 0.6) return false;      // the pit entry is just before the line: too late
+    const stop = this.nextStop(e);
+    if (stop && done > stop.lap - 0.55) { c.nextCmp = stop.cmp; return true; }
+    if (c.stops === 0 && left < 1.6) { c.nextCmp = c.nextCmp || (left > 1 ? 'S' : 'US'); return true; }
+    if (Math.max(...c.tw) > 0.9 && left > 1.2) { c.nextCmp = left > 4 ? 'M' : 'S'; return true; }
+    return false;
   }
 
   // ---- timing: start line + 2 splits per lap, interpolated to the millisecond
@@ -546,7 +580,7 @@ export class Game {
       e.lapStart = at;
       e.lapN = lap;
     }
-    const send = { t: 'sec', id: e.id, lap, k: ended, ms: lap >= 1 || type !== 0 ? ms : null, lapMs, total: at - sess.startAt };
+    const send = { t: 'sec', id: e.id, lap, k: ended, ms: lap >= 1 || type !== 0 ? ms : null, lapMs, total: at - sess.startAt, stops: e.c.stops };
     if (type === 0 && lap === 0) send.ms = null;
     this.send(send);
     // local bookkeeping for HUD colours
@@ -567,7 +601,7 @@ export class Game {
       }
       if (e === this.me && lap >= 1) e.secs = [null, null, null];
       if (sess.kind === 'race') {
-        if (lap >= sess.laps && !e.finished) this.finish(e, at);
+        if (lap >= sess.laps && !e.finished) { this.finish(e, at); if (e === this.me && this.pits && !e.c.stops) this.hud.banner('DISQUALIFIED - NO PIT STOP', 'final'); }
         else if (e === this.me && lap === sess.laps - 1) { this.hud.banner('FINAL LAP', 'final'); this.audio.sfx('finallap'); }
       } else if (sess.state === 'flag' && !e.done && at > (sess.flagAt || 0) - 2000) {
         e.done = true;
@@ -644,6 +678,7 @@ export class Game {
       c.stunT = f & (F.SPIN | F.TUMBLE) ? 1 : 0; c.stunKind = f & F.SPIN ? 'spin' : f & F.TUMBLE ? 'tumble' : '';
       c.trickT = f & F.TRICK ? 1 : 0;
       c.inPit = (f & F.PIT) !== 0;
+      if (this.pits) c.cmp = COMPOUND_IDS[(f >> F.CMP_SHIFT) & 3];
       if (f & F.FIN) e.finished = true;
     }
   }
@@ -666,6 +701,7 @@ export class Game {
     if (c.wallT > 0) f |= F.WALL;
     if (c.inkT > 0) f |= F.INK;
     if (c.inPit) f |= F.PIT;
+    if (this.pits) f |= (COMPOUND_IDS.indexOf(c.cmp) & 3) << F.CMP_SHIFT;
     return f;
   }
 

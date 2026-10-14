@@ -88,7 +88,12 @@ Your Netlify team protects new sites by default. This site is set like RICOCHAOS
   - **Manual** (Settings): X / Z or flick the right stick. Shifting inside the green band of the rev counter is a **perfect shift**: a near-seamless change plus +8% power for 0.8 s.
   - **HUD:** a rev counter with gear, revs, the redline and the perfect-shift window.
 - **Pit-stop races** (`js/sim/pit.js`). A race setting on loops of 1.5 km or more.
-  - **Tyres:** they wear with distance, sliding, drifting and hard braking, and lose grip past 60% (the tyre gauge shows it). Normal races have no wear.
+  - **Tyres** (`js/sim/tyres.js`). Four compounds (Ultrasoft, Soft, Medium, Hard), each with its own grip, wear rate, temperature window and warm-up speed. Normal races have no wear.
+    - **Temperature:** each tyre has its own. It heats from rolling, cornering load (the outer tyres in a turn), sliding, braking (fronts) and traction and drifting (rears). It cools faster at speed.
+    - **Wear:** follows the work each tyre does, and climbs steeply once it runs hotter than its window.
+    - **Grip:** falls with wear (sharply past 60%) and outside the window. Fronts limit turn-in, rears limit how well the car holds a slide and how fast drifts charge mini-turbos.
+  - **Mandatory stop:** at least one per race. Finishing without one is a disqualification.
+  - **Strategy** (`js/sim/strategy.js`, run in `js/strategyWorker.js`). In the lobby the game simulates your car on this track on every compound, measures the cost of a pit stop, then ranks every plan with 1-3 stops. Your pick sets your starting tyres and when the HUD calls you in. Bots use the simulated plans too.
   - **Pit lane:** planned beside a calm straight (usually the start straight) from the track geometry, validated so it never clashes with other parts of the loop or folds on a bend. The host ships the plan with the track so every player drives the same lane.
   - **The stop:** a 120 km/h limiter, three painted boxes and garages. Stop in a box and a quick-time event changes the four wheels. Bots pit when their tyres are gone and there's racing left.
   - **With pit stops off**, the lane is barriered off.
@@ -130,7 +135,9 @@ js/sim/          pure simulation, shared by game, test bench and Node sim
   track.js       route -> smooth centerline, validation, sectors, features
   physics.js     arcade car physics     ai.js       bots
   drivetrain.js  engines, gears, perfect shifts, launch calibration
-  pit.js         pit lane planning + validation, pit walls, tyre wear
+  pit.js         pit lane planning + validation, pit walls
+  tyres.js       compounds, per-tyre temperature / wear / grip
+  strategy.js    tyre strategy simulation + planner
   items.js       projectiles/hazards    parts.js    builds, mass coupling, upgrades
 js/game.js       client game: owned cars, remote interpolation, items, timing
 js/server.js     host room authority: lobby, sessions, results, points

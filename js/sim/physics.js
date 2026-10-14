@@ -7,7 +7,8 @@ import { PHYS } from './config.js';
 import { computeStats } from './parts.js';
 import { clamp, wrapAngle, lerpAngle } from './util.js';
 import { makeDrivetrain, driveStep, dragAt, initDrive } from './drivetrain.js';
-import { pitBounds, PIT, TYRE, tyreGrip } from './pit.js';
+import { pitBounds, PIT } from './pit.js';
+import { fitTyres, tyreStep } from './tyres.js';
 
 
 // Continuous stats (base car + parts, see parts.js) -> physics constants.
@@ -35,7 +36,7 @@ export const makeSpec = (type, build, equalize) => specFromStats(computeStats(ty
 const TIMERS = ['boostT', 'slowT', 'inkT', 'shieldT', 'invT', 'ramT', 'mirrorT', 'ghostT', 'trickT', 'wallT'];
 
 export function makeCarState(type, build) {
-  return {
+  const c = {
     type, spec: makeSpec(type, build),
     x: 0, z: 0, y: 0, vy: 0, h: 0, vx: 0, vz: 0, vf: 0, vl: 0, yaw: 0,
     drift: 0, driftCharge: 0, driftTier: 0, hopT: 0,
@@ -44,10 +45,11 @@ export function makeCarState(type, build) {
     airT: 0, trick: false, trickT: 0, rampS: -1, rampAir: false, padS: -1, wallT: 0,
     si: -1, lat: 0, P: 0, lastS: 0, wrongT: 0, draftT: 0,
     gear: 1, rpm: 0.12, shiftT: 0, shiftDur: 1, shiftCD: 0, perfT: 0, limT: 0, lastShift: '', manual: false,
-    tyre: 0, gripMul: 1,                                   // tyre wear 0..1 and the grip it leaves
-    inPit: false, pitLim: false, pitT: 0, pitDone: false,  // pit lane, limiter, service hold
+    inPit: false, pitLim: false, pitT: 0, pitDone: false, stops: 0, nextCmp: null,   // pit lane, limiter, service
     ev: [],
   };
+  fitTyres(c, 'M');      // per-tyre wear / temperature (sim/tyres.js), only used in pit-stop races
+  return c;
 }
 
 export function applyBoost(c, dur, pow) {
@@ -67,7 +69,7 @@ export function placeCar(c, track, slot) {
   c.x = slot.x; c.z = slot.z; c.h = slot.h; c.y = 0; c.vy = 0;
   c.vx = c.vz = c.vf = c.vl = 0;
   initDrive(c);
-  c.tyre = 0; c.gripMul = 1; c.inPit = c.pitLim = c.pitDone = false; c.pitT = 0;
+  fitTyres(c, c.cmp); c.inPit = c.pitLim = c.pitDone = false; c.pitT = 0; c.stops = 0;
   c.si = -1;
   const pr = track.project(c.x, c.z, -1);
   c.si = pr.i; c.lat = pr.lat; c.lastS = pr.s;
@@ -115,10 +117,12 @@ export function stepCar(c, inp, track, dt, env) {
   if (held) {
     c.pitT -= dt;
     c.vx = c.vz = 0;
-    if (c.pitT <= 0) { c.pitT = 0; c.tyre = 0; c.gripMul = 1; c.pitDone = true; ev.push('pitdone'); }
+    if (c.pitT <= 0) { c.pitT = 0; fitTyres(c, c.nextCmp || c.cmp); c.nextCmp = null; c.pitDone = true; c.stops++; ev.push('pitdone'); }
   }
   const drive = env.allowDrive && !stunned && !held;
-  const gm = c.gripMul ?? 1;
+  // tyre grip (pit-stop races only): fronts steer, rears hold the slide and charge drifts
+  const tyresOn = env.wear > 0;
+  const gF = tyresOn ? c.gripF : 1, gR = tyresOn ? c.gripR : 1;
   const thr = drive ? inp.throttle : 0, brk = drive ? inp.brake : 0, st = drive ? inp.steer : 0;
   const onGround = c.y <= 0.0001 && c.vy <= 0;
   let fx = Math.sin(c.h), fz = Math.cos(c.h);
@@ -141,7 +145,7 @@ export function stepCar(c, inp, track, dt, env) {
     }
     c.drift = 0; c.driftCharge = 0; c.driftTier = 0;
   } else if (onGround) {
-    c.driftCharge += dt * 0.95 * S.driftRate;
+    c.driftCharge += dt * 0.95 * S.driftRate * gR * gR;   // worn / cold rears: mini-turbos charge slowly
     const T = PHYS.driftTiers;
     const tier = c.driftCharge >= T[2] ? 3 : c.driftCharge >= T[1] ? 2 : c.driftCharge >= T[0] ? 1 : 0;
     if (tier > c.driftTier) { c.driftTier = tier; ev.push('tier' + tier); }
@@ -153,9 +157,9 @@ export function stepCar(c, inp, track, dt, env) {
   let yaw;
   if (c.drift) {
     const k = clamp(st * c.drift, -1, 1);
-    yaw = c.drift * S.driftYaw * gm * (0.5 + 0.8 * (k + 1) / 2) * lowF * (1 - 0.2 * clamp(sp / S.top, 0, 1.2));
+    yaw = c.drift * S.driftYaw * gF * (0.5 + 0.8 * (k + 1) / 2) * lowF * (1 - 0.2 * clamp(sp / S.top, 0, 1.2));
   } else {
-    yaw = st * S.maxYaw * gm * lowF * (1 - 0.35 * clamp(sp / S.top, 0, 1.2)) * (vf < -0.5 ? -1 : 1);
+    yaw = st * S.maxYaw * gF * lowF * (1 - 0.35 * clamp(sp / S.top, 0, 1.2)) * (vf < -0.5 ? -1 : 1);
   }
   if (!onGround) yaw *= 0.55;
   if (stunned) yaw = 0;
@@ -193,9 +197,9 @@ export function stepCar(c, inp, track, dt, env) {
     if (vf > top) vf -= Math.min(vf - top, (vf - top) * 1.6 * dt + 3 * dt);
     if (c.pitLim && vf > PIT.limit) vf -= Math.min(vf - PIT.limit, 26 * dt);   // pit limiter: brakes down to the limit
     if (stunned) vf *= Math.exp(-(c.stunKind === 'spin' ? 1.9 : 1.5) * dt);
-    const grip = (c.drift ? S.driftGrip : S.grip) * gm;
+    const grip = c.drift ? S.driftGrip * gR * gR : S.grip * gR;      // worn rears: drifts slide wide
     const nvl = vl * Math.exp(-grip * dt);
-    if (c.drift) vf += Math.abs(vl - nvl) * 0.22;
+    if (c.drift) vf += Math.abs(vl - nvl) * 0.22 * gR;
     vl = nvl;
   } else {
     vl *= Math.exp(-0.8 * dt);
@@ -204,13 +208,8 @@ export function stepCar(c, inp, track, dt, env) {
   if (held) { vf = 0; vl = 0; }
   c.vx = fx * vf + rx * vl; c.vz = fz * vf + rz * vl;
   c.vf = vf; c.vl = vl;
-  // ---- tyre wear: distance, sliding, drifting and hard braking all take rubber off
-  if (env.wear > 0 && onGround && !held) {
-    const T = TYRE;
-    c.tyre = Math.min(1, c.tyre + dt * env.wear * (T.base * Math.min(1.3, Math.abs(vf) / S.top) + T.slide * Math.min(1, Math.abs(vl) / 6)
-      + (c.drift ? T.drift : 0) + (brk > 0.5 && Math.abs(vf) > 8 ? T.brake : 0)));
-    c.gripMul = tyreGrip(c.tyre);
-  }
+  // ---- tyres: per-tyre temperature and wear (sim/tyres.js), pit-stop races only
+  if (tyresOn && !held) tyreStep(c, dt, { vf, vl, yaw: c.yaw, brk, thr, engine, onGround, rate: env.wear });
   c.x += c.vx * dt; c.z += c.vz * dt;
 
   // ---- track walls (and the pit lane's, sim/pit.js)

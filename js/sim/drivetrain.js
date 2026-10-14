@@ -140,7 +140,7 @@ export function driveStep(c, D, v, thr, brk, dt, inp = NO_SHIFT, grounded = true
   if (!grounded || thr <= 0) return 0;
   // ---- drive force
   const rE = slip ? Math.max(rW, c.rpm) : rW;
-  let a = Math.min(D.grip, D.P * torque(E, rE) / gv[g - 1]);
+  let a = Math.min(D.grip * (c.tractMul ?? 1), D.P * torque(E, rE) / gv[g - 1]);   // rear tyres limit traction
   if (limit || rW >= 1) a = 0;
   if (c.shiftT > 0) a *= c.lastShift === 'down' ? 0.85 : 1 - c.shiftT / c.shiftDur;   // torque fades back in
   if (c.perfT > 0) a *= 1 + G.perfectPow;

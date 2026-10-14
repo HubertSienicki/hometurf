@@ -27,18 +27,6 @@ export const PIT = {
   get limit() { return this.limitKmh / 3.6 / SPEEDO; },   // m/s
 };
 
-// ------------------------------------------------------------ tyres
-export const TYRE = {
-  // wear per second at full speed, per second of sliding / drifting / hard braking
-  base: 0.0042, slide: 0.0056, drift: 0.0032, brake: 0.0037,
-  cliff: 0.6,                 // past this the grip falls away quickly
-  rates: { off: 0, normal: 1, high: 2 },
-};
-// Grip left on tyres with wear w (0 = new, 1 = finished).
-export function tyreGrip(w) {
-  return w <= TYRE.cliff ? 1 - 0.12 * w : 1 - 0.12 * TYRE.cliff - 0.7 * (w - TYRE.cliff);
-}
-
 // ------------------------------------------------------------ geometry
 const smooth = t => t * t * (3 - 2 * t);
 const rel = (track, s, from) => track.wrapS(s - from);       // distance driven from `from` to s

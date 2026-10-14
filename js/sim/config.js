@@ -5,7 +5,7 @@
 export const NET = {
   PEER_PREFIX: 'hometurf-v1-',
   PUBLIC_SLOTS: 8,
-  PROTO: 4,           // bump on any wire-format change: mismatched tabs get told to refresh
+  PROTO: 5,           // bump on any wire-format change: mismatched tabs get told to refresh
   SNAP_HZ: 20,        // host -> everyone
   STATE_HZ: 30,       // owner -> host
   MAX_CARS: 12,

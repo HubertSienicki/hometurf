@@ -5,7 +5,7 @@ import { CAR_IDS, PAINT, DEFAULT_SETTINGS } from './sim/config.js';
 import { PARTS, SLOTS, MAX_PART_LEVEL, UPGRADE_COST, sanitizeBuild, stockBuild } from './sim/parts.js';
 
 const KEY = 'hometurf.profile.v1';
-const DEFAULT_PREFS = { volume: 0.8, sfx: 0.8, music: 0.45, quality: 'high', assist: true, cam: 'normal', units: 'kmh', showFps: false, sandbox: false, net: 'auto' };
+const DEFAULT_PREFS = { volume: 0.8, sfx: 0.8, music: 0.45, quality: 'high', assist: true, cam: 'normal', units: 'kmh', showFps: false, sandbox: false, net: 'auto', gearbox: 'auto' };
 
 // cumulative XP needed to reach driver level L
 export const xpFor = L => 100 * (L - 1) * (L - 1) + 200 * (L - 1);

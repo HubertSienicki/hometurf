@@ -2,6 +2,17 @@
 
 Generated from `js/version.js` by `npm run build`.
 
+## 1.3.0 - Engines and gearboxes (2026-10-14)
+
+- Every car now has a real engine and gearbox: torque curves, 5 to 7 gears, shift cuts and a rev limiter. Acceleration builds smoothly through the gears instead of snapping to top speed.
+- Rev counter on the HUD with gear, revs and a redline zone.
+- Automatic gearbox (default) drops a gear for corners and holds it through the bend.
+- Manual gearbox in Settings: X / Z (or flick the right stick). Shift inside the green band for a PERFECT SHIFT: a near-seamless change and a small power boost.
+- Engine sound follows the real revs. Flat out on a straight the engine cruises at about 3/4 of the redline, and the V12 no longer screams like a mosquito: lower pitch, more body and softer highs for every engine.
+- Launch control on the grid, revs that hold in the air, and rev-matched downshifts with a crackle on sporty exhausts.
+- Engine cards in the garage show the gearbox and redline. The Test Bench uses the new physics.
+- Rebalanced: stock cars are within 1% of each other and every part swap is within 0.4%.
+
 ## 1.2.0 - Relay connections (2026-10-14)
 
 - Friends who timed out joining can now get in: when a direct link to the host can't be made (mobile data, strict routers, CGNAT), the game switches to a relay server automatically.

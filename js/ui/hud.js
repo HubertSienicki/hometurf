@@ -1,6 +1,7 @@
 // In-race HUD: DOM for text/panels, canvases for the minimap and screen FX.
 import { ITEM_ICONS, ABILITY_ICONS } from './icons.js';
 import { ITEMS, ABILITIES, CARS, ITEM_TUNE, SPEEDO } from '../sim/config.js';
+import { GEARBOX, gearLabel } from '../sim/drivetrain.js';
 import { fmtTime, ordinal, escapeHtml, clamp } from '../sim/util.js';
 
 const $ = id => document.getElementById(id);
@@ -126,12 +127,13 @@ export class HUD {
       $('h-laptime').textContent = lt != null && t > 0 ? fmtTime(lt) : focus?.lapN === 0 || !focus ? 'OUT LAP' : '0:00.000';
     }
     if (focus?.best != null) $('h-best').innerHTML = `BEST <b>${fmtTime(focus.best)}</b>`;
-    // speed + drift charge
+    // speed, revs, gear + drift charge
     if (focus) {
       const c = focus.c;
       const kmh = Math.abs(c.vf) * 3.6 * SPEEDO;
       const mph = this.profile.settings.units === 'mph';
       $('h-speed').innerHTML = `<b>${Math.round(mph ? kmh * 0.621 : kmh)}</b><i>${mph ? 'mph' : 'km/h'}</i>`;
+      this.tach(c, focus === me && !!c.manual);
       const ch = $('h-charge');
       const T = [0.7, 1.5, 2.4];
       const tier = c.driftTier || 0;
@@ -280,6 +282,47 @@ export class HUD {
     const el = $('h-banner');
     el.textContent = text; el.className = ''; void el.offsetWidth; el.className = 'show ' + cls;
   }
+  // Rev counter: redline zone, the perfect-shift window (manual), live revs, gear.
+  tach(c, manual) {
+    const D = c.spec?.drive;
+    if (!D) return;
+    const cv = this.tachC || (this.tachC = $('h-tach-c')), g = this.tachG || (this.tachG = cv.getContext('2d'));
+    const W = 230, H = 150, dpr = Math.min(2, devicePixelRatio || 1);
+    if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, W, H);
+    const E = D.E, red = E.red, maxK = Math.ceil(red * 1.04 / 1000), full = maxK * 1000;
+    const cx = W / 2, cy = 90, R = 76, a0 = Math.PI * 0.8, a1 = Math.PI * 2.2;
+    const ang = rpm => a0 + (a1 - a0) * clamp(rpm / full, 0, 1);
+    const arc = (from, to, color, w) => { g.strokeStyle = color; g.lineWidth = w; g.beginPath(); g.arc(cx, cy, R, from, to); g.stroke(); };
+    g.lineCap = 'butt';
+    arc(a0, a1, 'rgba(8, 10, 20, 0.6)', 12);
+    const geared = D.gv.length > 1;
+    if (!E.electric) arc(ang(red), ang(full), 'rgba(255, 64, 52, 0.85)', 12);
+    const lo = (E.shiftAt + GEARBOX.perfectWin[0]) * red, hi = (E.shiftAt + GEARBOX.perfectWin[1]) * red;
+    if (manual && geared) arc(ang(lo), ang(hi), 'rgba(70, 255, 150, 0.75)', 12);
+    // ticks every 1000 rpm, numbers every 1000 (every 2000 past 12k)
+    g.fillStyle = 'rgba(255, 255, 255, 0.8)'; g.font = '600 11px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    const step = maxK > 12 ? 2 : 1;
+    for (let k = 0; k <= maxK; k++) {
+      const a = ang(k * 1000), ca = Math.cos(a), sa = Math.sin(a);
+      g.strokeStyle = k * 1000 >= red && !E.electric ? '#ff6a5a' : 'rgba(255, 255, 255, 0.7)';
+      g.lineWidth = 2; g.beginPath(); g.moveTo(cx + ca * (R - 10), cy + sa * (R - 10)); g.lineTo(cx + ca * (R - 17), cy + sa * (R - 17)); g.stroke();
+      if (k % step === 0) g.fillText(String(k), cx + ca * (R - 27), cy + sa * (R - 27));
+    }
+    // live revs
+    const r = clamp(c.rpm || 0, 0, 1.02), rpm = Math.max(E.idle, r * red);
+    const inWin = manual && geared && rpm >= lo && rpm <= hi;
+    const col = rpm > hi && geared && !E.electric ? '#ff4a3a' : inWin ? '#4dff9a' : r > 0.72 ? '#ffb43a' : '#ffffff';
+    g.shadowColor = col; g.shadowBlur = 12;
+    arc(a0, ang(rpm), col, 8);
+    g.shadowBlur = 0;
+    const gearEl = $('h-gear'), label = gearLabel(c, D);
+    if (gearEl.textContent !== label) gearEl.textContent = label;
+    gearEl.dataset.s = r >= 0.985 && geared ? 'limit' : inWin ? 'go' : '';
+    $('h-rpm').textContent = `${(Math.round(rpm / 50) * 50).toLocaleString()} rpm${geared ? (manual ? ' · MANUAL' : ' · AUTO') : ''}`;
+  }
+
   popup(text, cls = '') {
     const p = document.createElement('div');
     p.className = 'pop ' + cls; p.textContent = text;

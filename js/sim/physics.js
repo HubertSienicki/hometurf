@@ -6,15 +6,18 @@
 import { PHYS } from './config.js';
 import { computeStats } from './parts.js';
 import { clamp, wrapAngle, lerpAngle } from './util.js';
+import { makeDrivetrain, driveStep, dragAt, initDrive } from './drivetrain.js';
+
 
 // Continuous stats (base car + parts, see parts.js) -> physics constants.
 export function specFromStats(st) {
   const top = 32.4 + st.spd * 0.5;                 // 32.9 .. 34.9 m/s for stats 1..5
-  const t90 = Math.max(1.1, 3.95 - st.acc * 0.5);   // 3.45 .. 1.45 s to 90% of top speed
+  // 0 -> 90% of top speed: 8.0 .. 4.0 s for stats 1..5, met through real gears (drivetrain.js)
+  const t90 = Math.max(3.3, 9.0 - st.acc * 1.0);
   const dr = st.drift || 1;
   return {
-    top,
-    accel: 1.472 * top / t90,
+    top, t90,
+    drive: makeDrivetrain(st.engine || 'i4', top, t90, st.acc),   // engine, gears (drivetrain.js)
     maxYaw: 0.65 + st.hnd * 0.17,                  // grip turning rate (rad/s)
     driftYaw: (0.75 + st.hnd * 0.085) * (0.85 + 0.15 * dr), // drift turning rate (x0.5..1.3 by steering)
     driftRate: dr,                                 // mini-turbo charge speed
@@ -39,6 +42,7 @@ export function makeCarState(type, build) {
     stunT: 0, stunDur: 0, stunKind: '',
     airT: 0, trick: false, trickT: 0, rampS: -1, rampAir: false, padS: -1, wallT: 0,
     si: -1, lat: 0, P: 0, lastS: 0, wrongT: 0, draftT: 0,
+    gear: 1, rpm: 0.12, shiftT: 0, shiftDur: 1, shiftCD: 0, perfT: 0, limT: 0, lastShift: '', manual: false,
     ev: [],
   };
 }
@@ -59,6 +63,7 @@ export function stun(c, kind, dur) {
 export function placeCar(c, track, slot) {
   c.x = slot.x; c.z = slot.z; c.h = slot.h; c.y = 0; c.vy = 0;
   c.vx = c.vz = c.vf = c.vl = 0;
+  initDrive(c);
   c.si = -1;
   const pr = track.project(c.x, c.z, -1);
   c.si = pr.i; c.lat = pr.lat; c.lastS = pr.s;
@@ -75,6 +80,7 @@ export function respawn(c, track, back = 8) {
   c.si = p.i; c.lastS = track.wrapS(s); c.P -= back; c.lat = lat;
   c.stunT = 0; c.stunKind = ''; c.drift = 0; c.driftCharge = 0; c.driftTier = 0;
   c.ghostT = PHYS.respawnGhost; c.wrongT = 0;
+  c.gear = 1; c.shiftT = 0; c.perfT = 0;
 }
 
 // Jump `dist` metres along the track keeping lateral offset and speed.
@@ -90,7 +96,8 @@ export function teleportAlong(c, track, dist) {
 
 const relS = (track, s, s0) => { let d = s - s0; const L = track.L; if (d > L / 2) d -= L; else if (d < -L / 2) d += L; return d; };
 
-// inp: { throttle 0..1, brake 0..1, steer -1..1, drift (held), driftPressed (edge) }
+// inp: { throttle 0..1, brake 0..1, steer -1..1, drift (held), driftPressed (edge),
+//        shiftUp / shiftDown (edges, manual gearbox: c.manual) }
 // env: { allowDrive, topMul }
 export function stepCar(c, inp, track, dt, env) {
   const S = c.spec, ev = c.ev;
@@ -152,12 +159,18 @@ export function stepCar(c, inp, track, dt, env) {
   if (c.invT > 0) top *= 1.12;
   if (c.ramT > 0) top *= 1.1;
   if (c.slowT > 0) top *= 0.6;
+  const Dt = S.drive;
+  // gears + revs (m/s^2 at the wheels). On the grid the clutch is out: rev away.
+  const engine = env.allowDrive ? driveStep(c, Dt, vf, thr, brk, dt, inp, onGround)
+    : driveStep(c, Dt, vf, stunned ? 0 : inp.throttle || 0, 0, dt, undefined, false);
   if (onGround) {
     if (c.boostT > 0 && vf < top) vf += PHYS.boostAccel * dt;
     if (thr > 0) {
       if (vf < 0) vf += PHYS.brake * thr * dt;
-      else if (vf < top) vf += S.accel * thr * Math.max(0.04, 1 - (vf / top) ** 2) * dt;
+      else vf += engine * dt;
     }
+    // aero drag; a raised top speed (boosts, catch-up) means proportionally less of it
+    if (vf > 0) vf -= dragAt(Dt, vf) * Math.min(1, (S.top / top) ** 3) * dt;
     if (brk > 0) {
       if (vf > 0.5) vf -= PHYS.brake * brk * dt;
       else vf = Math.max(vf - PHYS.reverseAccel * brk * dt, -PHYS.reverseMax);

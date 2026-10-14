@@ -6,6 +6,7 @@ import { PRESETS, buildPreset } from '../sim/presets.js';
 import { ABILITY_ICONS, SLOT_ICONS } from './icons.js';
 import { fmtTime, escapeHtml } from '../sim/util.js';
 import { xpFor } from '../profile.js';
+import { ENGINES } from '../sim/drivetrain.js';
 
 const $ = id => document.getElementById(id);
 const STAT_KEYS = [['spd', 'SPEED'], ['acc', 'ACCEL'], ['hnd', 'HANDLING'], ['wgt', 'WEIGHT']];
@@ -113,7 +114,11 @@ export class Garage {
       if (pa.oil && pa.oil !== 1) chips.push(`<span class="p">oil ×${pa.oil.toFixed(2)}</span>`);
       if (pa.ram && Math.abs(pa.ram - 1) > 0.005) chips.push(`<span class="${pa.ram > 1 ? 'p' : 'n'}">ram ×${pa.ram.toFixed(2)}</span>`);
       if (pa.jump && pa.jump !== 1) chips.push(`<span class="t">air ×${pa.jump}</span>`);
-      if (opt.hp) chips.unshift(`<span class="t">${opt.hp} hp</span>`);
+      if (opt.hp) {
+        const E = ENGINES[id];
+        if (E) chips.unshift(`<span class="t">${E.electric ? 'single speed' : `${E.gears}-speed · ${(E.red / 1000).toFixed(1)}k rpm`}</span>`);
+        chips.unshift(`<span class="t">${opt.hp} hp</span>`);
+      }
       const on = b[slot] === id;
       const canLevel = !isStock && unlocked;
       const pips = canLevel ? `<span class="lvl" title="Upgrade level">${[1, 2, 3].map(i => `<i class="${i <= lv ? 'on' : ''}"></i>`).join('')}</span>` : '';

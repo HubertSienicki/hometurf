@@ -1,11 +1,13 @@
 // Game audio. Engines and tyres are real recordings (CC0, assets/audio):
-// each car crossfades an idle loop into a driving loop whose pitch follows a
-// simulated gearbox (shifts, limiter, lift-off backfires, turbo spool and
-// blow-off). Tyre squeal is granular - short overlapping slices of real
+// each car crossfades an idle loop into a driving loop whose pitch follows
+// the car's real engine speed and gear (sim/drivetrain.js: shifts, limiter,
+// lift-off backfires, turbo spool and blow-off). A sub-octave layer and a
+// gentle EQ keep high revs full rather than thin. Tyre squeal is granular - short overlapping slices of real
 // squeals - and crashes layer recorded impacts with a synthesized thud.
 // Opponents are 3D-positioned with Doppler. If the recordings can't load, a
 // synthesized engine (engineWorklet.js) takes over.
 import { sanitizeBuild } from './sim/parts.js';
+import { ENGINES as DRIVE } from './sim/drivetrain.js';
 
 // Firing points are fractions of the 720-degree cycle. The V8 is spaced
 // unevenly and its banks differ in loudness - that's the cross-plane burble.
@@ -17,7 +19,7 @@ const ENGINES = {
   rotary: { fire: EVEN(4), idle: 1050, red: 9500, body: 270, q: 2.2, bright: 4200, noise: 0.42, decay: 3.4, drive: 2.9, vol: 0.8, intake: 0.5, ampVar: 0.32 },
   diesel: { fire: EVEN(4), idle: 750, red: 4600, body: 92, q: 1, bright: 1300, noise: 0.5, decay: 7.5, drive: 1.4, vol: 1, intake: 0.25, knock: 0.32, turbo: 0.55 },
   v8:     { fire: [0, 0.135, 0.25, 0.365, 0.5, 0.64, 0.75, 0.86], amp: [1, 0.68, 1, 0.95, 0.7, 1, 0.66, 0.74], idle: 700, red: 7000, body: 105, q: 1.4, bright: 1500, noise: 0.24, decay: 6.5, drive: 2.2, vol: 1.05, intake: 0.4, jitter: 0.008 },
-  v12:    { fire: EVEN(12), idle: 950, red: 9200, body: 245, q: 1.2, bright: 4200, noise: 0.18, decay: 5, drive: 1.6, vol: 0.85, intake: 0.5, jitter: 0.003 },
+  v12:    { fire: EVEN(12), idle: 950, red: 9200, body: 245, q: 1.2, bright: 4200, noise: 0.18, decay: 5, drive: 1.6, vol: 1.0, intake: 0.5, jitter: 0.003 },
   ev:     { electric: true, base: 55, top: 720, vol: 0.32 },
 };
 const EXHAUSTS = {
@@ -44,19 +46,18 @@ const BANK = {
 // loudest real squeals in each tyre recording (seconds) - grains come from here
 const SQUEAL_GRAINS = [['squealA', 3.95, 4.45], ['squealA', 5.75, 6.2], ['squealB', 5.95, 6.35], ['squealB', 3.95, 4.35]];
 // How each engine part uses the recordings: playback-rate ranges map idle..redline.
+// Rates stay under ~2x (sped-up recordings turn thin and nasal); sub = level of
+// the same loop an octave down for body; chorus = a slightly detuned double
+// that smooths it out (many cylinders).
 const SAMPLED = {
-  twin:   { idle: 'idle', idleRate: [1.3, 1.7], drive: 'drive', rate: [1.2, 3.0], lp: 5200 },
-  i4:     { idle: 'idle', idleRate: [1.0, 1.35], drive: 'drive', rate: [0.95, 2.4], lp: 4400 },
-  turbo:  { idle: 'idle', idleRate: [1.0, 1.35], drive: 'drive', rate: [0.95, 2.45], lp: 3800 },
-  rotary: { idle: 'idle', idleRate: [1.3, 1.6], drive: 'drive', rate: [1.15, 2.9], lp: 6200 },
-  diesel: { idle: 'idle', idleRate: [0.8, 1.0], drive: 'drive', rate: [0.72, 1.5], lp: 2600 },
-  v8:     { idle: 'v8idle', idleRate: [1.0, 1.25], drive: 'v8', rate: [0.8, 2.0], lp: 4200 },
-  v12:    { idle: 'v8idle', idleRate: [1.2, 1.45], drive: 'v8', rate: [1.0, 2.5], lp: 6500 },
+  twin:   { idle: 'idle', idleRate: [1.3, 1.6], drive: 'drive', rate: [1.1, 2.25], lp: 4600, sub: 0.25 },
+  i4:     { idle: 'idle', idleRate: [1.0, 1.3], drive: 'drive', rate: [0.9, 1.85], lp: 3900, sub: 0.35 },
+  turbo:  { idle: 'idle', idleRate: [1.0, 1.3], drive: 'drive', rate: [0.9, 1.8], lp: 3400, sub: 0.38 },
+  rotary: { idle: 'idle', idleRate: [1.25, 1.5], drive: 'drive', rate: [1.05, 2.05], lp: 4800, sub: 0.3 },
+  diesel: { idle: 'idle', idleRate: [0.8, 1.0], drive: 'drive', rate: [0.7, 1.32], lp: 2400, sub: 0.45 },
+  v8:     { idle: 'v8idle', idleRate: [1.0, 1.2], drive: 'v8', rate: [0.75, 1.6], lp: 3800, sub: 0.4 },
+  v12:    { idle: 'v8idle', idleRate: [1.1, 1.3], drive: 'v8', rate: [0.92, 1.72], lp: 4300, sub: 0.42, chorus: 1.012 },
 };
-
-// Top-speed fractions per gear. 7th only engages while boosting, so normal
-// flat-out sits just under the limiter instead of bouncing off it.
-const GEARS = [0.22, 0.36, 0.5, 0.65, 0.81, 1.02, 1.36];
 const SPEED_OF_SOUND = 343;
 const fin = (v, d = 0) => (Number.isFinite(v) ? v : d);
 
@@ -65,43 +66,35 @@ export function engineProfile(type, buildIn) {
   const e = ENGINES[b.engine] || ENGINES.i4, x = EXHAUSTS[b.exhaust] || EXHAUSTS.stock;
   if (e.electric) return { ...e, key: 'ev' + (b.hood === 'blower' ? 'b' : '') , blower: b.hood === 'blower' };
   const sm = SAMPLED[b.engine] || SAMPLED.i4;
+  const dr = DRIVE[b.engine] || DRIVE.i4;
   return {
-    ...e, key: `${b.engine}|${b.exhaust}|${b.hood}`,
+    ...e, idle: dr.idle, red: dr.red, key: `${b.engine}|${b.exhaust}|${b.hood}`,
     bright: e.bright * x.bright, vol: e.vol * x.vol, pops: x.pops, drive: e.drive * (x.drive || 1),
     blower: b.hood === 'blower',
     sample: { ...sm, lp: sm.lp * (0.75 + 0.25 * x.bright) },
   };
 }
 
-// ------------------------------------------------------------ gearbox
-class Drivetrain {
-  constructor() { this.g = 0; this.rpm = 900; this.shift = 0; this.load = 0.1; this.limT = 0; this.prevThr = 0; }
-  update(p, dt, speed, top, thr, air, spin, boost) {
-    let ev = null;
+// ------------------------------------------------------------ engine state
+// Follows the car's real engine (sim/drivetrain.js): revs, gear changes and
+// throttle, plus the bits only the sound needs (smoothed load, lift-off).
+class EngineTrack {
+  constructor() { this.gear = 1; this.rpm = 900; this.load = 0.1; this.prevThr = 0; }
+  update(p, c, dt, thr) {
     dt = fin(dt, 0); thr = fin(thr, 0);
-    if (!Number.isFinite(this.rpm)) this.rpm = p.idle;
-    const vf = Math.min(2, Math.abs(fin(speed)) / Math.max(1, fin(top, 33)));
-    const maxG = boost ? GEARS.length - 1 : GEARS.length - 2;
-    if (this.g < maxG && vf > GEARS[this.g] * 0.985 && thr > 0.15) { this.g++; this.shift = 0.13; ev = 'up'; }
-    else if (this.g > maxG) { this.g = maxG; ev = 'down'; }
-    else if (this.g > 0 && vf < GEARS[this.g - 1] * (thr > 0.15 ? 0.86 : 0.68)) { this.g--; ev = 'down'; }
-    const span = p.red - p.idle;
-    let target = p.idle + span * Math.min(1.04, vf / GEARS[this.g]);
-    if (vf < 0.04) target = p.idle + span * 0.3 * thr;
-    if (air || spin) target += (p.red * 1.01 - target) * 0.6 * thr;
-    if (this.shift > 0) { this.shift -= dt; this.rpm += (target - this.rpm) * Math.min(1, dt * 22); }
-    else this.rpm += (target - this.rpm) * Math.min(1, dt * (target > this.rpm ? 9 : 6));
+    let ev = null;
+    const g = c.gear || 1;
+    if (g > this.gear) ev = 'up'; else if (g < this.gear) ev = 'down';
+    this.gear = g;
+    const r = Math.max(0, Math.min(1.02, fin(c.rpm, 0.15)));
+    this.rpm = Math.max(p.idle, r * p.red);
     let load = thr > 0.05 ? 0.35 + 0.65 * thr : 0.04;
-    if (this.shift > 0) load = 0.05;
-    if (this.rpm > p.red * 0.99 && thr > 0.5) {        // bouncing off the limiter
-      this.limT += dt;
-      if (Math.floor(this.limT * 15) % 2) { load = 0.05; this.rpm -= 220; }
-    } else this.limT = 0;
+    if (c.shiftT > 0 && c.lastShift !== 'down') load = 0.08;     // torque cut while the gear changes
+    if (c.limT > 0 && Math.floor(c.limT * 16) % 2) load = 0.05;  // bouncing off the limiter
     this.load = fin(this.load + (load - this.load) * Math.min(1, dt * 30), 0.1);
-    if (!Number.isFinite(this.rpm)) { console.warn('engine rpm went non-finite', { speed, top, thr, g: this.g }); this.rpm = p.idle; }
     const lift = this.prevThr > 0.6 && thr < 0.1;
     this.prevThr = thr;
-    return { ev, lift, rpmF: Math.max(0, Math.min(1.05, (this.rpm - p.idle) / span)) };
+    return { ev, lift, rpmF: Math.max(0, Math.min(1.05, (this.rpm - p.idle) / (p.red - p.idle))) };
   }
 }
 
@@ -311,7 +304,7 @@ export class Audio {
   // ------------------------------------------------------------ engine voices
   makeVoice(positional) {
     const ctx = this.ctx;
-    const v = { out: this.gain(0), dt: new Drivetrain(), key: null, nodes: [], car: null, spool: 0, popAcc: 0 };
+    const v = { out: this.gain(0), dt: new EngineTrack(), key: null, nodes: [], car: null, spool: 0, popAcc: 0 };
     if (positional) { v.pan = this.panner(); v.out.connect(v.pan); v.pan.connect(this.engG); }
     else v.out.connect(this.engG);
     return v;
@@ -330,11 +323,20 @@ export class Audio {
       v.driveSrc = keep(this.src(this.bank[sp.drive], true));
       v.idleG = keep(this.gain(0)); v.driveG = keep(this.gain(0));
       v.lp = keep(this.filt('lowpass', sp.lp, 0.6));
-      v.level = keep(this.gain(p.vol * 3.2));
-      this.chain(v.idleSrc, v.idleG, v.lp); this.chain(v.driveSrc, v.driveG, v.lp); this.chain(v.lp, v.level, v.out);
+      // comfort EQ: a little weight down low, the harsh 2-6 kHz region eased off
+      const eq = [keep(this.filt('lowshelf', 140, 0.7, 3)), keep(this.filt('peaking', 2700, 0.9, -4)), keep(this.filt('highshelf', 5200, 0.7, -5))];
+      v.level = keep(this.gain(p.vol * 4.0));
+      this.chain(v.idleSrc, v.idleG, v.lp); this.chain(v.driveSrc, v.driveG, v.lp); this.chain(v.lp, ...eq, v.level, v.out);
+      // body: the same loop an octave down, low-passed
+      v.subSrc = keep(this.src(this.bank[sp.drive], true));
+      v.subG = keep(this.gain(0));
+      this.chain(v.subSrc, keep(this.filt('lowpass', 280, 0.7)), v.subG, eq[0]);
+      if (sp.chorus) {
+        v.chSrc = keep(this.src(this.bank[sp.drive], true));
+        this.chain(v.chSrc, v.driveG);
+      }
       // random start points so several cars never phase against each other
-      v.idleSrc.start(0, Math.random() * v.idleSrc.buffer.duration);
-      v.driveSrc.start(0, Math.random() * v.driveSrc.buffer.duration);
+      for (const src of [v.idleSrc, v.driveSrc, v.subSrc, v.chSrc]) if (src) src.start(0, Math.random() * src.buffer.duration);
     } else if (p.electric) {
       v.osc = [1, 2.02, 3.15].map((m, i) => {
         const o = keep(ctx.createOscillator()); o.type = 'sine';
@@ -377,10 +379,10 @@ export class Audio {
   // Drives one voice from a car's state. doppler scales every pitch.
   driveVoice(v, c, thr, dt, doppler = 1, isMe = false) {
     const p = v.p, t = this.t;
-    const r = v.dt.update(p.electric ? ENGINES.i4 : p, dt, c.vf, c.spec?.top || 33, thr, c.y > 0.4, c.drift !== 0 || (c.stunT > 0 && Math.abs(c.vf) > 4), c.boostT > 0);
+    const r = v.dt.update(p.electric ? { idle: 0, red: 16000 } : p, c, dt, thr);
     const rpm = v.dt.rpm, load = v.dt.load;
     if (p.electric) {
-      const f = (p.base + (p.top - p.base) * Math.min(1.1, Math.abs(c.vf) / (c.spec?.top || 33))) * doppler;
+      const f = (p.base + (p.top - p.base) * Math.min(1.1, (c.rpm || 0) / 0.97)) * doppler;
       for (const { o, m } of v.osc) o.frequency.setTargetAtTime(f * m, t, 0.03);
       v.hiss.gain.setTargetAtTime(0.02 + 0.05 * thr, t, 0.05);
       v.out.gain.setTargetAtTime(p.vol * (0.25 + 0.75 * Math.max(thr, 0.2)) * (isMe ? 1 : 1.4), t, 0.05);
@@ -390,10 +392,13 @@ export class Audio {
       const drive = sp.rate[0] * Math.pow(sp.rate[1] / sp.rate[0], f) * doppler;
       const idle = (sp.idleRate[0] + (sp.idleRate[1] - sp.idleRate[0]) * Math.min(1, f / 0.18)) * doppler;
       v.driveSrc.playbackRate.setTargetAtTime(drive, t, 0.03);
+      v.subSrc.playbackRate.setTargetAtTime(drive * 0.5, t, 0.03);
+      if (v.chSrc) v.chSrc.playbackRate.setTargetAtTime(drive * sp.chorus, t, 0.03);
       v.idleSrc.playbackRate.setTargetAtTime(idle, t, 0.03);
       v.idleG.gain.setTargetAtTime(idleMix * (0.8 + 0.2 * load), t, 0.05);
-      v.driveG.gain.setTargetAtTime((1 - idleMix) * (0.4 + 0.6 * load), t, 0.04);
-      v.lp.frequency.setTargetAtTime(sp.lp * (0.4 + 0.6 * load) * (0.7 + 0.5 * f), t, 0.04);
+      v.driveG.gain.setTargetAtTime((1 - idleMix) * (0.4 + 0.6 * load) * (v.chSrc ? 0.7 : 1), t, 0.04);
+      v.subG.gain.setTargetAtTime((1 - idleMix * 0.7) * sp.sub * (0.45 + 0.55 * load), t, 0.05);
+      v.lp.frequency.setTargetAtTime(sp.lp * (0.45 + 0.55 * load) * (0.75 + 0.4 * f), t, 0.04);
       v.out.gain.setTargetAtTime(1, t, 0.05);
       if (p.pops > 0) {
         if (r.lift && r.rpmF > 0.45) {
@@ -401,6 +406,7 @@ export class Audio {
           for (let i = 0; i < n; i++) setTimeout(() => this.pop(v.out), 30 + i * (40 + Math.random() * 90));
         }
         if (r.ev === 'up' && p.pops >= 0.6 && Math.random() < 0.6) this.pop(v.out);
+        if (r.ev === 'down' && thr < 0.1 && p.pops >= 0.35 && Math.random() < 0.5) setTimeout(() => this.pop(v.out), 60);   // blip on the downshift
         if (thr < 0.1 && r.rpmF > 0.35) { v.popAcc += dt * p.pops * 2 * r.rpmF; if (v.popAcc > Math.random() * 3) { v.popAcc = 0; this.pop(v.out); } }
       }
     } else {
@@ -534,6 +540,8 @@ export class Audio {
       case 'mt': this.noise(0.35, { vol: 0.16, freq: 3000, type: 'bandpass', q: 1.5, slide: -1800 }); this.noise(0.7, { vol: 0.12 + 0.06 * (o.tier || 1), freq: 400, slide: 2500, type: 'bandpass', q: 0.7, delay: 0.05 }); break;
       case 'tier': this.tone(1400 + (o.tier || 1) * 300, 0.06, { vol: 0.03 }); break;
       case 'hop': this.noise(0.08, { vol: 0.08, brown: true, freq: 300 }); break;
+      case 'perfect': this.tone(1180, 0.07, { vol: 0.05, slide: 600 }); this.tone(2360, 0.05, { vol: 0.015, delay: 0.03 }); break;
+      case 'deny': this.tone(150, 0.12, { type: 'square', vol: 0.03 }); break;
       case 'land': this.tone(70, 0.25, { vol: 0.35, slide: -30 }); this.noise(0.2, { vol: 0.2, brown: true, freq: 500 }); this.noise(0.18, { vol: 0.06, freq: 1300, type: 'bandpass', q: 6 }); break;
       case 'ramp': this.noise(0.5, { vol: 0.1, freq: 600, slide: 900, type: 'bandpass', q: 0.8 }); break;
       case 'trick': this.noise(0.4, { vol: 0.12, freq: 500, slide: 1500, type: 'bandpass', q: 1 }); break;
@@ -594,8 +602,8 @@ export class Audio {
       if (!this.myVoice) this.myVoice = this.makeVoice(false);
       this.configureVoice(this.myVoice, engineProfile(me.type, me.build));
       const input = game.inp?.throttle || 0;
-      const thr = me.finished ? 0.75 : input * (c.stunT > 0 ? 0.2 : 1);   // revving on the grid works too
-      try { this.driveVoice(this.myVoice, c, thr, dt, 1, true); } catch (err) { console.warn('engine voice', err); this.myVoice.dt = new Drivetrain(); }
+      const thr = (me.finished ? me.thr ?? 0.75 : input) * (c.stunT > 0 ? 0.2 : 1);   // revving on the grid works too
+      try { this.driveVoice(this.myVoice, c, thr, dt, 1, true); } catch (err) { console.warn('engine voice', err); this.myVoice.dt = new EngineTrack(); }
       const sp = Math.abs(c.vf), top = c.spec.top;
       const slide = Math.abs(c.vl || 0);
       const squeal = c.y > 0.3 ? 0 : Math.max(c.drift ? 0.45 + 0.12 * c.driftTier : 0, Math.min(1, (slide - 2.2) / 7), c.stunT > 0 && sp > 6 ? 0.6 : 0, (game.inp?.brake || 0) > 0.5 && sp > 22 ? 0.25 : 0);
@@ -668,9 +676,8 @@ export class Audio {
         const vs = (c.vx * dx + c.vz * dz) / d, vl = this.camVel ? (this.camVel.x * dx + this.camVel.z * dz) / d : 0;
         dop = fin(Math.max(0.75, Math.min(1.3, (SPEED_OF_SOUND + vl) / (SPEED_OF_SOUND + vs))), 1);
       }
-      const braking = (e.flags & 4096) !== 0;
-      const thr = braking ? 0 : Math.abs(c.vf) < (c.spec?.top || 33) * 0.97 ? 1 : 0.55;
-      try { this.driveVoice(v, c, thr, dt, dop, false); } catch (err) { v.dt = new Drivetrain(); v.spool = 0; }
+      const thr = e.thr ?? ((e.flags & 4096) !== 0 ? 0 : 1);
+      try { this.driveVoice(v, c, thr, dt, dop, false); } catch (err) { v.dt = new EngineTrack(); v.spool = 0; }
     }
   }
 

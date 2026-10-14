@@ -80,9 +80,13 @@ Your Netlify team protects new sites by default. This site is set like RICOCHAOS
 - **Readable at speed.** Item-box rows and boost pads have light pillars and floating icons visible from 300 m away, even through fog. They also appear on the minimap. Three camera heights are available in Settings.
 - **Items.** 12 Mario Kart-style items, plus drift mini-turbos, rocket starts, ramps with tricks, slipstream and bots at 3 skill levels.
 - **Rooms.** Chat, quick-chat, server browser, invite links, and day, sunset or night racing.
+- **Engines and gearboxes** (`js/sim/drivetrain.js`). Each engine has a torque curve, 5 to 7 gears and a redline. Power and drag are solved per car so every car keeps the top speed and 0-90% time its stats ask for, with gear changes included.
+  - **Automatic** (default): a sporty box that drops a gear for corners and holds it through the bend.
+  - **Manual** (Settings): X / Z or flick the right stick. Shifting inside the green band of the rev counter is a **perfect shift**: a near-seamless change plus +8% power for 0.8 s.
+  - **HUD:** a rev counter with gear, revs, the redline and the perfect-shift window.
 - **Controls.** Keyboard with smoothed steering, or a gamepad with analog throttle and steering. The optional steering assist keeps you off the walls.
 - **Real recorded audio** (CC0, see `assets/audio/CREDITS.md`).
-  - **Engines:** each car crossfades a real idle recording into a real driving loop. V8 cars use a Maserati V8. The pitch follows a simulated gearbox with shifts, a rev limiter, lift-off backfires and turbo blow-off.
+  - **Engines:** each car crossfades a real idle recording into a real driving loop. V8 cars use a Maserati V8. The pitch follows the car's real revs and gear, with shifts, the rev limiter, lift-off backfires and turbo blow-off. A sub-octave layer and a gentle EQ keep high revs full rather than thin.
   - **Opponents:** their engines are 3D-positioned with Doppler.
   - **Tyres:** squeal is built from short slices of real tyre recordings.
   - **Crashes:** use real collision recordings.
@@ -114,6 +118,7 @@ All tuning lives in `js/sim/config.js` (physics, cars, items) and `js/sim/parts.
 js/sim/          pure simulation, shared by game, test bench and Node sim
   track.js       route -> smooth centerline, validation, sectors, features
   physics.js     arcade car physics     ai.js       bots
+  drivetrain.js  engines, gears, perfect shifts, launch calibration
   items.js       projectiles/hazards    parts.js    builds, mass coupling, upgrades
 js/game.js       client game: owned cars, remote interpolation, items, timing
 js/server.js     host room authority: lobby, sessions, results, points

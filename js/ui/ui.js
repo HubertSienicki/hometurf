@@ -429,6 +429,7 @@ export class UI {
       <label>Music</label>${range('music')}
       <label>Graphics</label>${seg('quality', [['low', 'Low'], ['medium', 'Medium'], ['high', 'High']])}
       <label>Steering assist <span class="small dim">(nudges you away from walls)</span></label>${seg('assist', [[true, 'On'], [false, 'Off']])}
+      <label>Gearbox <span class="small dim">(manual: X / Z or right stick; shift in the green for a small boost)</span></label>${seg('gearbox', [['auto', 'Automatic'], ['manual', 'Manual']])}
       <label>Camera</label>${seg('cam', [['low', 'Low'], ['normal', 'Normal'], ['far', 'High & far']])}
       <label>Speed units</label>${seg('units', [['kmh', 'km/h'], ['mph', 'mph']])}
       <label>Connection <span class="small dim">(Relay: for networks that block direct links - adds a little lag)</span></label>${seg('net', [['auto', 'Auto'], ['relay', 'Always relay']])}

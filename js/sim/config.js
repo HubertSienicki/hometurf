@@ -5,7 +5,7 @@
 export const NET = {
   PEER_PREFIX: 'hometurf-v1-',
   PUBLIC_SLOTS: 8,
-  PROTO: 2,           // bump on any wire-format change: mismatched tabs get told to refresh
+  PROTO: 3,           // bump on any wire-format change: mismatched tabs get told to refresh
   SNAP_HZ: 20,        // host -> everyone
   STATE_HZ: 30,       // owner -> host
   MAX_CARS: 12,
@@ -23,7 +23,7 @@ export const PHYS = {
   brake: 30,
   reverseAccel: 14,
   reverseMax: 9,
-  coast: 5,
+  coast: 2.2,                 // engine braking off the throttle (drag comes on top, drivetrain.js)
   boostAccel: 34,
   boostTopMul: 0.3,           // top speed bonus per unit of boost power
   driftMinSpeed: 11,

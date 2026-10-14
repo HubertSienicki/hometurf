@@ -67,7 +67,7 @@ export class Game {
     this.seq = 0; this.goT = -99; this.now = 0;
     this.spectate = null; this.me = null;
     this.ci = { ...NO_INPUT };
-    this.edges = { driftP: false, itemP: false, abilityP: false };
+    this.edges = { driftP: false, itemP: false, abilityP: false, shiftUp: false, shiftDown: false };
     this._hits = [];
     this.beeped = 99;
     this.itemCtx = {
@@ -146,7 +146,7 @@ export class Game {
       if (!e || e.owned) continue;
       const last = e.buf[e.buf.length - 1];
       if (last && last.t >= s[1]) continue;
-      e.buf.push({ t: s[1], x: s[2], y: s[3], z: s[4], h: s[5], vx: s[6], vz: s[7], steer: s[8], f: s[9], P: s[10], lat: s[11], sp: s[12], si: s[13] });
+      e.buf.push({ t: s[1], x: s[2], y: s[3], z: s[4], h: s[5], vx: s[6], vz: s[7], steer: s[8], f: s[9], P: s[10], lat: s[11], sp: s[12], si: s[13], g: (s[14] & 15) || 1, thr: ((s[14] >> 4) & 7) / 7 });
       if (e.buf.length > 30) e.buf.shift();
     }
   }
@@ -216,6 +216,8 @@ export class Game {
     const inp = this.input.sample(dt);
     this.inp = inp;
     if (inp.driftP) this.edges.driftP = true;
+    if (inp.shiftUp) this.edges.shiftUp = true;
+    if (inp.shiftDown) this.edges.shiftDown = true;
     if (inp.itemP) this.edges.itemP = true;
     if (inp.abilityP) this.edges.abilityP = true;
     this.handleKeys(inp);
@@ -308,8 +310,9 @@ export class Game {
       if (e.respawnCD > 0) e.respawnCD -= dt;
       let ci;
       if (e === this.me && !e.finished && !e.done) ci = this.playerInput(e, started);
-      else if (e.brain) ci = e.brain.think(c, tr, dt, this.botCtx(e, started));
-      else ci = NO_INPUT;
+      else if (e.brain) { ci = e.brain.think(c, tr, dt, this.botCtx(e, started)); c.manual = false; }
+      else { ci = NO_INPUT; c.manual = false; }
+      e.thr = ci.throttle;
       if (!started) this.rocketWatch(e, ci);
       else if (!e.rsDone) this.rocketFire(e, ci);
       if (c.inkT > 0 && e.bot && !e.finished) ci.steer = clamp(ci.steer + Math.sin(this.now / 180 + e.order) * 0.6, -1, 1);
@@ -330,13 +333,15 @@ export class Game {
     }
     if (started && !sess.ghost && sess.collisions !== false) this.collisions();
     if (this.items) this.items.update(dt, this.itemCtx);
-    this.edges.driftP = this.edges.itemP = this.edges.abilityP = false;
+    this.edges.driftP = this.edges.itemP = this.edges.abilityP = this.edges.shiftUp = this.edges.shiftDown = false;
   }
 
   playerInput(e, started) {
     const inp = this.inp, ci = this.ci, c = e.c;
     ci.throttle = inp.throttle; ci.brake = inp.brake; ci.steer = inp.steer; ci.drift = inp.drift;
     ci.driftPressed = this.edges.driftP; ci.useItem = this.edges.itemP; ci.useAbility = this.edges.abilityP;
+    ci.shiftUp = this.edges.shiftUp; ci.shiftDown = this.edges.shiftDown;
+    c.manual = this.profile.settings.gearbox === 'manual';
     ci.back = inp.brake > 0.5 || inp.look;
     // driving assist: nudge toward the road direction and away from walls.
     // Never while drift is held - the drift direction must come from the player.
@@ -433,6 +438,8 @@ export class Game {
           else if (ev === 'trick') this.audio.sfx('trick');
           else if (ev === 'trickboost') { this.hud.popup('TRICK!', 'good'); this.audio.sfx('boost'); }
           else if (ev === 'hop') this.audio.sfx('hop');
+          else if (ev === 'perfect') { this.hud.popup('PERFECT SHIFT', 'shift'); this.audio.sfx('perfect'); }
+          else if (ev === 'nodown') this.audio.sfx('deny');
           else if (ev.startsWith('tier')) this.audio.sfx('tier', { tier: +ev[4] });
         }
       } else if (ev.k === 'wall') {
@@ -552,10 +559,19 @@ export class Game {
         c.x = a.x + a.vx * ex; c.z = a.z + a.vz * ex; c.y = a.y; c.h = a.h; c.vx = a.vx; c.vz = a.vz; c.P = a.P; c.lat = a.lat;
         e.steerVis = a.steer; e.stunPhase = a.sp;
       }
-      const f = (b && rt - a.t > (b.t - a.t) / 2 ? b.f : a.f);
+      const near = b && rt - a.t > (b.t - a.t) / 2 ? b : a;
+      const f = near.f;
       e.flags = f;
       c.si = a.si;
       c.vf = c.vx * Math.sin(c.h) + c.vz * Math.cos(c.h);
+      // engine: their gear and throttle come over the wire, revs follow from speed
+      c.gear = near.g || 1; e.thr = near.thr || 0;
+      const D = c.spec?.drive;
+      if (D) {
+        const g = Math.min(c.gear, D.gv.length), rW = Math.abs(c.vf) / D.gv[g - 1];
+        c.rpm = Math.min(1, c.y > 0.4 ? D.idleR + (0.97 - D.idleR) * e.thr
+          : Math.max(D.idleR, g === 1 && rW < 0.42 && e.thr > 0.05 ? 0.42 : rW));
+      }
       c.ramT = f & F.RAM ? 1 : 0; c.invT = f & F.STAR ? 1 : 0; c.ghostT = f & F.GHOST ? 1 : 0; c.shieldT = f & F.SHIELD ? 1 : 0;
       c.mirrorT = f & F.MIRROR ? 1 : 0; c.boostT = f & F.BOOST ? 1 : 0; c.slowT = f & F.SLOW ? 1 : 0;
       c.drift = f & F.DRIFT ? (f & F.DRIFT_R ? 1 : -1) : 0; c.driftTier = (f & F.TIER) >> 2;
@@ -592,7 +608,8 @@ export class Game {
       const c = e.c;
       e.flags = this.ownedFlags(e);
       e.stunPhase = c.stunT > 0 ? 1 - c.stunT / c.stunDur : 0;
-      s.push([e.id, Math.round(now), r2(c.x), r2(c.y), r2(c.z), r3(c.h), r2(c.vx), r2(c.vz), r2(e.steerVis), e.flags, r1(c.P), r2(c.lat), r2(e.stunPhase), c.si]);
+      s.push([e.id, Math.round(now), r2(c.x), r2(c.y), r2(c.z), r3(c.h), r2(c.vx), r2(c.vz), r2(e.steerVis), e.flags, r1(c.P), r2(c.lat), r2(e.stunPhase), c.si,
+        (c.gear & 15) | (Math.round(clamp(e.thr || 0, 0, 1) * 7) << 4)]);
     }
     if (s.length) this.send({ t: 'st', s }, false);
   }

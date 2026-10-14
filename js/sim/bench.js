@@ -5,7 +5,8 @@ import { Track } from './track.js';
 import { makeCarState, stepCar, placeCar, respawn, stun, specFromStats } from './physics.js';
 import { computeStats } from './parts.js';
 import { BotBrain } from './ai.js';
-import { PHYS } from './config.js';
+import { PHYS, SPEEDO } from './config.js';
+import { launch } from './drivetrain.js';
 
 function lapRun(track, spec, { laps = 3, chaos = false } = {}) {
   const c = makeCarState('comet');
@@ -46,16 +47,14 @@ function lapRun(track, spec, { laps = 3, chaos = false } = {}) {
   return { laps: lapsOut, vmax, corner: cornerN ? cornerSum / cornerN : 0, walls, mts };
 }
 
+// Flat-out launch through the gears, in speedometer km/h (SPEEDO-scaled).
 function straightLine(spec) {
-  let v = 0, t = 0, t100 = null, t160 = null;
-  const dt = 1 / 240;
-  while (t < 30 && (t100 == null || (t160 == null && spec.top * 3.6 > 160))) {
-    v += spec.accel * Math.max(0.04, 1 - (v / spec.top) ** 2) * dt;
-    t += dt;
-    if (t100 == null && v >= 100 / 3.6) t100 = t;
-    if (t160 == null && v >= 160 / 3.6) t160 = t;
-    if (v >= spec.top * 0.995) break;
-  }
+  let t100 = null, t160 = null;
+  launch(spec.drive, { tMax: 30, onStep: (t, v) => {
+    const kmh = v * 3.6 * SPEEDO;
+    if (t100 == null && kmh >= 100) t100 = t;
+    if (t160 == null && kmh >= 160) { t160 = t; return false; }
+  } });
   return { t100, t160 };
 }
 

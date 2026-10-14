@@ -24,12 +24,12 @@ export const PARTS = {
     options: {
       twin:   { name: 'Twin 0.7',      hp: 75,  kg: 90,  d: { spd: -0.15, acc: -0.09 },  lvl: 1, desc: 'Featherweight bike-derived twin. Saves a lot of kilos.' },
       i4:     { name: 'Street I4',     hp: 160, kg: 130, d: { spd: 0, acc: 0 },          lvl: 1, desc: 'Honest four-banger. The reference everything is measured against.' },
-      turbo:  { name: 'Turbo I4',      hp: 235, kg: 145, d: { spd: 0.15, acc: -0.05 },        lvl: 2, desc: 'Big turbo on a light block. More top end for a few kilos.' },
-      rotary: { name: 'Rotary',        hp: 250, kg: 115, d: { spd: 0.3, acc: -0.55 },     lvl: 4, desc: 'Screams to the redline. Light, but lazy off the line.' },
-      diesel: { name: 'Turbo Diesel',  hp: 260, kg: 220, d: { spd: 0, acc: 0.72 },       lvl: 5, desc: 'Mountains of torque, and it weighs like one.' },
-      v8:     { name: 'V8 Muscle',     hp: 390, kg: 210, d: { spd: 0.25, acc: 0.26 },    lvl: 7, desc: 'Big, loud and heavy in the nose.' },
-      ev:     { name: 'Dual Motor EV', hp: 420, kg: 280, d: { spd: -0.1, acc: 1.35 },     lvl: 9, desc: 'Instant torque from standstill. The battery is the catch.' },
-      v12:    { name: 'V12',           hp: 540, kg: 260, d: { spd: 0.64, acc: 0.12 },     lvl: 12, desc: 'Absurd top end. Absurd weight.' },
+      turbo:  { name: 'Turbo I4',      hp: 235, kg: 145, d: { spd: 0.15, acc: -0.32 },        lvl: 2, desc: 'Big turbo on a light block. More top end for a few kilos.' },
+      rotary: { name: 'Rotary',        hp: 250, kg: 115, d: { spd: 0.3, acc: -0.25 },     lvl: 4, desc: 'Screams to the redline. Light, but lazy off the line.' },
+      diesel: { name: 'Turbo Diesel',  hp: 260, kg: 220, d: { spd: -0.3, acc: 0.45 },    lvl: 5, desc: 'Mountains of torque, and it weighs like one.' },
+      v8:     { name: 'V8 Muscle',     hp: 390, kg: 210, d: { spd: 0.25, acc: 0.1 },     lvl: 7, desc: 'Big, loud and heavy in the nose.' },
+      ev:     { name: 'Dual Motor EV', hp: 420, kg: 280, d: { spd: -0.1, acc: 1.2 },      lvl: 9, desc: 'Instant torque from standstill. The battery is the catch.' },
+      v12:    { name: 'V12',           hp: 540, kg: 260, d: { spd: 0.85, acc: 0.48 },     lvl: 12, desc: 'Absurd top end. Absurd weight.' },
     },
   },
   exhaust: {
@@ -94,8 +94,8 @@ export const PARTS = {
     options: {
       street: { name: 'Street',         kg: 0,  d: {},                          lvl: 1, desc: 'All-rounders.' },
       slick:  { name: 'Racing Slicks',  kg: 4,  d: { hnd: 0.45 }, drift: 0.85,    lvl: 3, desc: 'Huge grip, but slides charge mini-turbos slowly.' },
-      drift:  { name: 'Drift Compound', kg: 0,  d: { hnd: -0.55 }, drift: 1.22,   lvl: 4, desc: 'Slippery. Drifts tighter and charges mini-turbos fast.' },
-      knobby: { name: 'Off-road Knobbies', kg: 30, d: { spd: -0.2, hnd: -0.1 }, stun: 0.9, oil: 0.55, lvl: 6, desc: 'Shrug off oil and bounce back from hits faster.' },
+      drift:  { name: 'Drift Compound', kg: 0,  d: { hnd: -0.55 }, drift: 1.17,   lvl: 4, desc: 'Slippery. Drifts tighter and charges mini-turbos fast.' },
+      knobby: { name: 'Off-road Knobbies', kg: 30, d: { spd: -0.3, hnd: -0.1 }, stun: 0.9, oil: 0.55, lvl: 6, desc: 'Shrug off oil and bounce back from hits faster.' },
     },
   },
   wheels: {
@@ -219,6 +219,6 @@ export function computeStats(type, build, equalize = false) {
   const r = v => Math.round(v * 100) / 100;
   return {
     spd: r(clamp(spd, 0.2, 6.5)), acc: r(clamp(acc, 0.2, 6.5)), hnd: r(clamp(hnd, 0.2, 6.5)), wgt: r(clamp(wgtFromMass(kg), 0.2, 7)),
-    drift, stun, oil, ram, jump, kg: Math.round(kg), hp: eng.hp,
+    drift, stun, oil, ram, jump, kg: Math.round(kg), hp: eng.hp, engine: b.engine,
   };
 }

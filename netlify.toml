@@ -1,0 +1,12 @@
+[build]
+  publish = "dist"
+  command = "node scripts/build.mjs"
+
+# Always revalidate so every player gets the same game version after a deploy
+# (mismatched versions can't join each other's rooms).
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"

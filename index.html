@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HOME TURF - race your own streets</title>
+  <meta name="description" content="A 3D kart racer where you build tracks from real streets on the map, tune your car, and race friends peer-to-peer with items, abilities and full race weekends.">
+  <link rel="icon" href="favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bungee&family=Rubik:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }</script>
+</head>
+<body>
+  <canvas id="gl"></canvas>
+  <div id="vignette"></div>
+  <div id="fps" class="hidden"></div>
+
+  <!-- ================================================================ HUD -->
+  <div id="hud" class="hidden">
+    <canvas id="hud-fx"></canvas>
+    <div id="h-flash"></div>
+    <div class="hud-tl">
+      <div id="h-pos"></div>
+      <ol id="h-tower"></ol>
+    </div>
+    <div class="hud-tc">
+      <div id="h-sess"></div>
+      <div id="h-laptime">0:00.000</div>
+      <div id="h-sectors"><div class="sec"><b>S1</b><span></span></div><div class="sec"><b>S2</b><span></span></div><div class="sec"><b>S3</b><span></span></div></div>
+      <div id="h-delta"></div>
+      <div id="h-best"></div>
+    </div>
+    <div class="hud-tr">
+      <div class="itemwrap">
+        <div id="h-item" class="slot"><div class="ic"></div><span class="cnt"></span><kbd>E</kbd></div>
+        <div id="h-itemname"></div>
+      </div>
+      <div id="h-abil" class="abil"><div class="ring"></div><div class="ic"></div><kbd>Q</kbd><span class="nm"></span></div>
+    </div>
+    <div class="hud-bc"><div id="h-speed"></div><div id="h-charge"><div></div></div></div>
+    <div class="hud-br"><canvas id="h-map" width="220" height="220"></canvas></div>
+    <div class="hud-bl"><div id="h-feed"></div><div id="h-chat"></div></div>
+    <div id="h-center"><div id="h-count"></div><div id="h-banner"></div><div id="h-wrong">WRONG WAY</div></div>
+    <div id="h-spec"></div>
+    <div id="h-pops"></div>
+    <div id="h-tab" class="hidden"></div>
+  </div>
+  <form id="chatbox" class="hidden" autocomplete="off"><input id="chat-in" maxlength="160" placeholder="Say something... (Enter to send, Esc to cancel)"></form>
+
+  <!-- ================================================================ SCREENS -->
+  <section id="s-title" class="screen">
+    <div class="title-wrap">
+      <div class="logo big"><span class="l1">HOME</span><span class="l2">TURF</span></div>
+      <p class="tagline">Race your own streets.</p>
+      <div class="press">Press any key or click to start</div>
+    </div>
+    <div class="title-foot">Map data &copy; OpenStreetMap contributors</div>
+  </section>
+
+  <section id="s-menu" class="screen">
+    <div class="menu-left">
+      <div class="logo"><span class="l1">HOME</span><span class="l2">TURF</span></div>
+      <nav class="menu-nav">
+        <button class="mbtn primary" data-act="quick"><span>Quick Race</span><small>You vs bots, right now</small></button>
+        <button class="mbtn" data-act="host"><span>Host Game</span><small>Open a room for your friends</small></button>
+        <button class="mbtn" data-act="join"><span>Join Game</span><small>Got a room code?</small></button>
+        <button class="mbtn" data-act="browser"><span>Server Browser</span><small>Find public rooms</small></button>
+        <button class="mbtn" data-act="studio"><span>Track Studio</span><small>Turn your neighbourhood into a circuit</small></button>
+        <button class="mbtn" data-act="garage"><span>Garage</span><small>Cars, parts, paint and the test bench</small></button>
+        <div class="menu-row">
+          <button class="sbtn" data-act="settings">Settings</button>
+          <button class="sbtn" data-act="controls">Controls</button>
+        </div>
+      </nav>
+    </div>
+    <div class="profile-card" id="m-profile"></div>
+  </section>
+
+  <section id="s-join" class="screen">
+    <div class="panel narrow">
+      <header class="phead"><button class="back" data-act="menu">&larr; Back</button><h2>Join a room</h2></header>
+      <p class="muted">Ask the host for their 5-letter room code (or just open their invite link).</p>
+      <form id="join-form" class="row" autocomplete="off">
+        <input id="join-code" maxlength="12" placeholder="ROOM CODE" spellcheck="false">
+        <button class="btn primary">Join</button>
+      </form>
+      <p id="join-err" class="err"></p>
+    </div>
+  </section>
+
+  <section id="s-browser" class="screen">
+    <div class="panel narrow">
+      <header class="phead"><button class="back" data-act="menu">&larr; Back</button><h2>Public rooms</h2><button class="btn small" data-act="refresh">Refresh</button></header>
+      <div id="b-list" class="b-list"></div>
+      <p class="muted small">Public rooms appear here when the host ticks <b>Public room</b> in the lobby.</p>
+    </div>
+  </section>
+
+  <section id="s-garage" class="screen">
+    <header class="g-top">
+      <button class="back" data-act="garage-done">&larr; Done</button>
+      <h2>Garage</h2>
+      <div class="wallet" id="g-wallet"></div>
+    </header>
+    <div class="g-cars panel" id="g-cars"></div>
+    <div class="g-hero">
+      <div class="g-name"><h1 id="g-carname"></h1><span id="g-carkind"></span></div>
+      <p id="g-blurb"></p>
+      <div class="g-abil" id="g-abil"></div>
+      <div class="g-drag">drag to rotate</div>
+    </div>
+    <div class="g-side panel">
+      <div class="g-stats" id="g-stats"></div>
+      <div class="tabs" id="g-tabs">
+        <button data-tab="parts" class="on">Parts</button>
+        <button data-tab="paint">Paint &amp; style</button>
+        <button data-tab="bench">Test bench</button>
+      </div>
+      <div class="g-tab" id="g-parts">
+        <div class="slot-bar" id="g-slots"></div>
+        <div class="opt-list" id="g-opts"></div>
+      </div>
+      <div class="g-tab hidden" id="g-paint"></div>
+      <div class="g-tab hidden" id="g-bench"></div>
+    </div>
+  </section>
+
+  <section id="s-lobby" class="screen">
+    <header class="l-top">
+      <button class="back" data-act="leave">&larr; Leave</button>
+      <div class="room-code" id="l-code"></div>
+      <div class="l-phase" id="l-phase"></div>
+    </header>
+    <div class="l-grid">
+      <div class="panel l-players">
+        <h3>Drivers <span id="l-count" class="muted"></span></h3>
+        <ul id="l-plist"></ul>
+        <div class="host-only row gap"><button class="btn small" data-act="addbot">+ Add bot</button><button class="btn small ghost" data-act="rmbot">- Remove bot</button></div>
+      </div>
+      <div class="l-mid">
+        <div class="panel l-track">
+          <canvas id="l-map" width="320" height="220"></canvas>
+          <div class="l-trackinfo">
+            <div class="kicker">Track</div>
+            <h3 id="l-trackname">-</h3>
+            <p id="l-trackmeta" class="muted"></p>
+            <div class="row gap">
+              <button class="btn host-only" data-act="tracks">Change track</button>
+              <button class="btn ghost" data-act="savetrack" id="l-savetrack">Save to my tracks</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel l-settings" id="l-settings"></div>
+        <div class="panel l-standings hidden" id="l-standings"></div>
+      </div>
+      <div class="panel l-chat">
+        <h3>Chat</h3>
+        <div id="l-chatlog" class="chatlog"></div>
+        <form id="l-chatform" class="row" autocomplete="off"><input id="l-chatin" maxlength="160" placeholder="Say something..."><button class="btn small">Send</button></form>
+      </div>
+    </div>
+    <footer class="l-bottom">
+      <div class="l-mycar" id="l-mycar"></div>
+      <div class="row gap">
+        <button class="btn" data-act="garage">Garage</button>
+        <button class="btn big guest-only" id="l-ready" data-act="ready">Ready</button>
+        <button class="btn big primary host-only" id="l-start" data-act="start">Start</button>
+      </div>
+    </footer>
+  </section>
+
+  <section id="s-tracks" class="screen">
+    <div class="panel wide">
+      <header class="phead"><button class="back" data-act="tracks-back">&larr; Back</button><h2>Choose a track</h2>
+        <div class="row gap"><button class="btn small ghost" data-act="import">Import file</button><button class="btn small primary" data-act="studio">+ Build from the map</button></div></header>
+      <div class="kicker">Your tracks</div>
+      <div class="t-grid" id="t-mine"></div>
+      <div class="kicker">Built-in</div>
+      <div class="t-grid" id="t-presets"></div>
+    </div>
+    <input type="file" id="t-file" accept=".json,application/json" class="hidden">
+  </section>
+
+  <section id="s-studio" class="screen">
+    <div id="st-map"></div>
+    <aside class="st-panel">
+      <header class="phead"><button class="back" data-act="studio-back">&larr; Back</button><h2>Track Studio</h2></header>
+      <form id="st-search" class="row" autocomplete="off"><input id="st-q" placeholder="Search a place or address..."><button class="btn small">Go</button></form>
+      <div class="row gap"><button class="btn small ghost" data-act="locate">Use my location</button><button class="btn small ghost" data-act="surprise">Surprise me</button></div>
+      <ol class="st-steps">
+        <li><b>Find your streets.</b> Search or drag the map - streets load automatically once you're zoomed in close enough.
+          <div class="row gap"><button class="btn small ghost" data-act="loadroads" id="st-load">Load streets here</button><label class="chk"><input type="checkbox" id="st-paths"> include paths &amp; parks</label></div>
+          <div id="st-roadinfo" class="muted small"></div></li>
+        <li><b>Click the map to drop waypoints.</b> The route follows the streets and loops back to the start. Drag points to adjust, right-click to delete.
+          <div class="row gap"><button class="btn small ghost" data-act="undo">Undo</button><button class="btn small ghost" data-act="reverse">Reverse</button><button class="btn small ghost" data-act="clear">Clear</button><label class="chk"><input type="checkbox" id="st-snap" checked> snap to streets</label></div></li>
+        <li><b>Check it.</b> <div id="st-checks" class="checks"></div></li>
+        <li><b>Name it and build.</b>
+          <div class="row gap"><input id="st-name" placeholder="Track name" maxlength="40"><select id="st-width"><option value="12">Narrow</option><option value="14" selected>Normal</option><option value="18">Wide</option></select></div>
+          <button class="btn primary big full" data-act="build" id="st-build" disabled>Build track</button>
+          <div id="st-progress" class="muted small"></div></li>
+      </ol>
+    </aside>
+  </section>
+
+  <section id="s-settings" class="screen">
+    <div class="panel narrow">
+      <header class="phead"><button class="back" data-act="settings-back">&larr; Back</button><h2>Settings</h2></header>
+      <div id="set-form" class="form"></div>
+    </div>
+  </section>
+
+  <section id="s-controls" class="screen">
+    <div class="panel narrow">
+      <header class="phead"><button class="back" data-act="controls-back">&larr; Back</button><h2>Controls</h2></header>
+      <table class="keys" id="keys"></table>
+      <div class="tips" id="tips"></div>
+    </div>
+  </section>
+
+  <section id="s-results" class="screen overlay">
+    <div class="panel results">
+      <div class="kicker" id="r-kicker"></div>
+      <h2 id="r-title"></h2>
+      <div id="r-table"></div>
+      <div id="r-awards" class="awards"></div>
+      <div id="r-reward" class="reward"></div>
+      <div class="row gap end" id="r-actions"></div>
+    </div>
+  </section>
+
+  <section id="s-pause" class="screen overlay">
+    <div class="panel pause">
+      <h2>Paused</h2>
+      <p class="muted small">The race keeps going for everyone else.</p>
+      <div class="col gap">
+        <button class="btn big" data-act="resume">Resume</button>
+        <button class="btn host-only" data-act="end-session">End session now</button>
+        <button class="btn host-only" data-act="to-lobby">Back to lobby</button>
+        <button class="btn" data-act="settings">Settings</button>
+        <button class="btn" data-act="controls">Controls</button>
+        <button class="btn danger" data-act="leave">Leave room</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="modal" class="hidden"></div>
+  <div id="toasts"></div>
+  <div id="loading" class="hidden"><div class="spin"></div><span id="loading-text">Loading...</span></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
